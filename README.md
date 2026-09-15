@@ -72,7 +72,7 @@ HTMX/HTMAX 4.0.0 and Basecoat 1.0.2 CSS are pinned, vendored, and embedded in th
 
 For interactive Basecoat components, prefer HTML/CSS and then `hx-live` before introducing Basecoat's JavaScript or another browser runtime. This is a preference, not dogma: use a supported JS runtime if reproducing a component's behavior would compromise accessibility or correctness.
 
-See [architecture-browser.md](architecture-browser.md) for the browser interaction model and [tangent.md](tangent.md) for the minimal orientation intended for AI agents.
+See [architecture-browser.md](architecture-browser.md) for the browser interaction model and [agent.md](agent.md) for the minimal orientation intended for AI agents.
 
 ## Example
 

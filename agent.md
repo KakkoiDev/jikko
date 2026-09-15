@@ -1,4 +1,4 @@
-# Jikko Tangent
+# Jikko Agent Guide
 
 Read this first if you are an AI agent working on Jikko. It is intentionally short. For format details see `specification-v1.md`; for browser details see `architecture-browser.md`.
 
