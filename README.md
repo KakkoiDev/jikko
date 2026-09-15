@@ -6,7 +6,7 @@ Jikko is a filesystem-native format for turning Markdown knowledge into actionab
 
 A Jikko workspace is ordinary Markdown. YAML frontmatter adds explicit semantics where needed, `[[links]]` express relationships, and `![[embeds]]` compose documents, tasks, and live views.
 
-The source stays portable. The reference harness is a small Go program that exposes the same workspace semantics to a CLI and a server-rendered HTMX browser interface.
+The source stays portable. The reference harness is a small Go program that exposes the same workspace semantics to a CLI and a server-rendered browser interface.
 
 ## Core model
 
@@ -35,8 +35,13 @@ Documents hold information and compose other files. Tasks add explicit actionabl
                            │
               ┌────────────┴────────────┐
               ▼                         ▼
-             CLI                    HTTP/HTMX
-        human + agents                browser
+             CLI                  Go HTTP server
+        human + agents                   │
+                                  HTML + HTMX 4
+                                  hx-live + SSE
+                                  Basecoat CSS
+                                         │
+                                      browser
 ```
 
 The CLI is also Jikko's initial machine interface. Commands that mutate a workspace must remain structured edits of the same Markdown source rather than creating a second data model. Human-readable output is the default; machine-facing commands should provide deterministic JSON.
@@ -53,6 +58,17 @@ go run ./cmd/jikko serve
 ```
 
 The core currently scans Markdown directly into memory. There is deliberately no database or persistent `.data` index yet; persistent indexing should be added only if measurements justify it.
+
+### Browser stack
+
+The reference browser harness deliberately stays server-first:
+
+- **HTMX 4** for hypermedia requests and DOM swaps.
+- **hx-live** for the small amount of behavior that genuinely belongs in HTML. It is preferred over adding a separate client-side application framework or `_hyperscript` dependency.
+- **hx-sse / Server-Sent Events by default** for server-to-browser live workspace updates. Ordinary HTTP requests remain the browser-to-server path. WebSockets are reserved for a future feature that actually requires a long-lived bidirectional channel.
+- **Basecoat CSS** as the component/design layer on top of Tailwind conventions, keeping server-rendered markup readable instead of filling templates with utility-class soup.
+
+The initial implementation loads pinned HTMX 4.0.0 and Basecoat 1.0.2 assets from a CDN. The intended production distribution is still one Go binary; these pinned assets should be vendored and embedded before calling the browser harness offline/self-contained.
 
 ## Example
 
