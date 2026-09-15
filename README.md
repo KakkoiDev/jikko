@@ -68,7 +68,11 @@ The reference browser harness deliberately stays server-first:
 - **hx-sse / Server-Sent Events by default** for server-to-browser live workspace updates. Ordinary HTTP requests remain the browser-to-server path. WebSockets are reserved for a future feature that actually requires a long-lived bidirectional channel.
 - **Basecoat CSS** as the component/design layer on top of Tailwind conventions, keeping server-rendered markup readable instead of filling templates with utility-class soup.
 
-The initial implementation loads pinned HTMX 4.0.0 and Basecoat 1.0.2 assets from a CDN. The intended production distribution is still one Go binary; these pinned assets should be vendored and embedded before calling the browser harness offline/self-contained.
+HTMX/HTMAX 4.0.0 and Basecoat 1.0.2 CSS are pinned, vendored, and embedded in the Go binary. `jikko serve` serves them locally under `/assets/`; the browser harness therefore needs no CDN, npm install, or network connection at runtime.
+
+For interactive Basecoat components, prefer HTML/CSS and then `hx-live` before introducing Basecoat's JavaScript or another browser runtime. This is a preference, not dogma: use a supported JS runtime if reproducing a component's behavior would compromise accessibility or correctness.
+
+See [architecture-browser.md](architecture-browser.md) for the browser interaction model and [tangent.md](tangent.md) for the minimal orientation intended for AI agents.
 
 ## Example
 
