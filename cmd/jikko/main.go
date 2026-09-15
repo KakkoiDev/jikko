@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -49,17 +50,27 @@ func check(args []string) {
 	if broken > 0 { os.Exit(1) }; fmt.Printf("ok: %d pages\n", len(w.Pages))
 }
 
+type pageData struct { Pages []*jikko.Page; Query string }
+
 func serve(args []string) {
 	f := flag.NewFlagSet("serve", flag.ExitOnError); dir := f.String("dir", ".", "workspace"); addr := f.String("addr", "127.0.0.1:8080", "listen address"); f.Parse(args)
 	t := template.Must(template.New("jikko").Parse(pageHTML + pagesHTML))
-	pages := func(r *http.Request) []*jikko.Page { q := r.URL.Query(); return open(*dir).List(jikko.Kind(q.Get("type")), q.Get("status")) }
+	data := func(r *http.Request) pageData {
+		q := r.URL.Query()
+		filters := url.Values{}
+		if v := q.Get("type"); v != "" { filters.Set("type", v) }
+		if v := q.Get("status"); v != "" { filters.Set("status", v) }
+		query := ""; if encoded := filters.Encode(); encoded != "" { query = "?" + encoded }
+		return pageData{Pages: open(*dir).List(jikko.Kind(q.Get("type")), q.Get("status")), Query: query}
+	}
+	renderPages := func(r *http.Request) (string, error) { var b bytes.Buffer; err := t.ExecuteTemplate(&b, "pages", data(r)); return b.String(), err }
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" { http.NotFound(w, r); return }
-		if err := t.ExecuteTemplate(w, "page", pages(r)); err != nil { http.Error(w, err.Error(), 500) }
+		if err := t.ExecuteTemplate(w, "page", data(r)); err != nil { http.Error(w, err.Error(), 500) }
 	})
 	http.HandleFunc("/pages", func(w http.ResponseWriter, r *http.Request) {
-		if err := t.ExecuteTemplate(w, "pages", pages(r)); err != nil { http.Error(w, err.Error(), 500) }
+		if err := t.ExecuteTemplate(w, "pages", data(r)); err != nil { http.Error(w, err.Error(), 500) }
 	})
 	http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher); if !ok { http.Error(w, "streaming unsupported", 500); return }
@@ -67,27 +78,19 @@ func serve(args []string) {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		var previous string
+		previous, err := renderPages(r); if err != nil { return }
 		ticker := time.NewTicker(time.Second); defer ticker.Stop()
 		for {
-			var b bytes.Buffer
-			if err := t.ExecuteTemplate(&b, "pages", pages(r)); err != nil { return }
-			current := b.String()
-			if current != previous {
-				fmt.Fprintf(w, "data: %s\n\n", oneLine(current)); flusher.Flush(); previous = current
-			}
 			select { case <-r.Context().Done(): return; case <-ticker.C: }
+			current, err := renderPages(r); if err != nil { return }
+			if current != previous { fmt.Fprintf(w, "data: %s\n\n", oneLine(current)); flusher.Flush(); previous = current }
 		}
 	})
 
 	log.Printf("Jikko: http://%s", *addr); log.Fatal(http.ListenAndServe(*addr, nil))
 }
 
-func oneLine(s string) string {
-	var b bytes.Buffer
-	for _, line := range bytes.Split([]byte(s), []byte("\n")) { b.Write(line) }
-	return b.String()
-}
+func oneLine(s string) string { return string(bytes.ReplaceAll([]byte(s), []byte("\n"), nil)) }
 
 const pageHTML = `{{define "page"}}<!doctype html>
 <html>
@@ -107,15 +110,15 @@ const pageHTML = `{{define "page"}}<!doctype html>
 <span class="text-xs text-muted-foreground" hx-live="textContent = 'live'">live</span>
 </header>
 <nav class="mb-6 flex gap-2" aria-label="Page filters">
-<button class="btn" data-variant="outline" hx-get="/pages" hx-target="#pages">All</button>
-<button class="btn" data-variant="outline" hx-get="/pages?type=task" hx-target="#pages">Tasks</button>
-<button class="btn" data-variant="outline" hx-get="/pages?type=view" hx-target="#pages">Views</button>
+<button class="btn" data-variant="outline" hx-get="/pages" hx-target="#pages" hx-swap="outerHTML">All</button>
+<button class="btn" data-variant="outline" hx-get="/pages?type=task" hx-target="#pages" hx-swap="outerHTML">Tasks</button>
+<button class="btn" data-variant="outline" hx-get="/pages?type=view" hx-target="#pages" hx-swap="outerHTML">Views</button>
 </nav>
-<section id="pages" hx-sse:connect="/events" hx-swap="innerHTML">{{template "pages" .}}</section>
+{{template "pages" .}}
 </main>
 </body>
 </html>{{end}}`
 
-const pagesHTML = `{{define "pages"}}<div class="item-group">{{range .}}<article class="item" data-variant="outline"><section><h3>{{.Title}}</h3><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.</p></section></article>{{end}}</div>{{end}}`
+const pagesHTML = `{{define "pages"}}<section id="pages" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML"><div class="item-group">{{range .Pages}}<article class="item" data-variant="outline"><section><h3>{{.Title}}</h3><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.</p></section></article>{{end}}</div></section>{{end}}`
 
 func usage() { fmt.Println("jikko <list|show|check|serve>\n\nUse --json with list/show for deterministic machine output.") }
