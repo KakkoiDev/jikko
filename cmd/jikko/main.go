@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"time"
 
 	jikko "github.com/KakkoiDev/jikko"
 )
@@ -47,14 +50,75 @@ func check(args []string) {
 	if broken > 0 { os.Exit(1) }; fmt.Printf("ok: %d pages\n", len(w.Pages))
 }
 
+type pageData struct { Pages []*jikko.Page; Query string }
+
 func serve(args []string) {
 	f := flag.NewFlagSet("serve", flag.ExitOnError); dir := f.String("dir", ".", "workspace"); addr := f.String("addr", "127.0.0.1:8080", "listen address"); f.Parse(args)
-	t := template.Must(template.New("index").Parse(pageHTML))
-	h := func(w http.ResponseWriter, r *http.Request) { ws := open(*dir); q := r.URL.Query(); data := ws.List(jikko.Kind(q.Get("type")), q.Get("status")); if err := t.Execute(w, data); err != nil { http.Error(w, err.Error(), 500) } }
-	http.HandleFunc("/", h); http.HandleFunc("/pages", h)
+	t := template.Must(template.New("jikko").Parse(pageHTML + pagesHTML))
+	data := func(r *http.Request) pageData {
+		q := r.URL.Query()
+		filters := url.Values{}
+		if v := q.Get("type"); v != "" { filters.Set("type", v) }
+		if v := q.Get("status"); v != "" { filters.Set("status", v) }
+		query := ""; if encoded := filters.Encode(); encoded != "" { query = "?" + encoded }
+		return pageData{Pages: open(*dir).List(jikko.Kind(q.Get("type")), q.Get("status")), Query: query}
+	}
+	renderPages := func(r *http.Request) (string, error) { var b bytes.Buffer; err := t.ExecuteTemplate(&b, "pages", data(r)); return b.String(), err }
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" { http.NotFound(w, r); return }
+		if err := t.ExecuteTemplate(w, "page", data(r)); err != nil { http.Error(w, err.Error(), 500) }
+	})
+	http.HandleFunc("/pages", func(w http.ResponseWriter, r *http.Request) {
+		if err := t.ExecuteTemplate(w, "pages", data(r)); err != nil { http.Error(w, err.Error(), 500) }
+	})
+	http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher); if !ok { http.Error(w, "streaming unsupported", 500); return }
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		previous, err := renderPages(r); if err != nil { return }
+		ticker := time.NewTicker(time.Second); defer ticker.Stop()
+		for {
+			select { case <-r.Context().Done(): return; case <-ticker.C: }
+			current, err := renderPages(r); if err != nil { return }
+			if current != previous { fmt.Fprintf(w, "data: %s\n\n", oneLine(current)); flusher.Flush(); previous = current }
+		}
+	})
+
 	log.Printf("Jikko: http://%s", *addr); log.Fatal(http.ListenAndServe(*addr, nil))
 }
 
-const pageHTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Jikko</title><script src="https://unpkg.com/htmx.org@2.0.8"></script><style>body{font:16px system-ui;max-width:900px;margin:3rem auto;padding:0 1rem}nav{display:flex;gap:.5rem;margin-bottom:2rem}button{padding:.5rem .8rem}li{margin:.5rem 0}small{opacity:.6}</style></head><body><h1>Jikko</h1><nav><button hx-get="/pages" hx-target="#pages">All</button><button hx-get="/pages?type=task" hx-target="#pages">Tasks</button><button hx-get="/pages?type=view" hx-target="#pages">Views</button></nav><ul id="pages">{{range .}}<li><strong>{{.Title}}</strong> <small>{{.Kind}} · {{.Path}}</small></li>{{else}}<li>No pages.</li>{{end}}</ul></body></html>`
+func oneLine(s string) string { return string(bytes.ReplaceAll([]byte(s), []byte("\n"), nil)) }
+
+const pageHTML = `{{define "page"}}<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jikko</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/basecoat-css@1.0.2/dist/basecoat.cdn.min.css">
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/htmx.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-live.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.min.js"></script>
+</head>
+<body class="bg-background text-foreground">
+<main class="mx-auto max-w-4xl p-6 md:p-10">
+<header class="mb-8 flex items-center justify-between">
+<div><h1 class="text-3xl font-semibold tracking-tight">Jikko</h1><p class="text-muted-foreground">Structured work in plain Markdown.</p></div>
+<span class="text-xs text-muted-foreground" hx-live="textContent = 'live'">live</span>
+</header>
+<nav class="mb-6 flex gap-2" aria-label="Page filters">
+<button class="btn" data-variant="outline" hx-get="/pages" hx-target="#pages" hx-swap="outerHTML">All</button>
+<button class="btn" data-variant="outline" hx-get="/pages?type=task" hx-target="#pages" hx-swap="outerHTML">Tasks</button>
+<button class="btn" data-variant="outline" hx-get="/pages?type=view" hx-target="#pages" hx-swap="outerHTML">Views</button>
+</nav>
+{{template "pages" .}}
+</main>
+</body>
+</html>{{end}}`
+
+const pagesHTML = `{{define "pages"}}<section id="pages" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML"><div class="item-group">{{range .Pages}}<article class="item" data-variant="outline"><section><h3>{{.Title}}</h3><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.</p></section></article>{{end}}</div></section>{{end}}`
 
 func usage() { fmt.Println("jikko <list|show|check|serve>\n\nUse --json with list/show for deterministic machine output.") }
