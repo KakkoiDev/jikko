@@ -1,0 +1,41 @@
+name: Vendor browser assets
+
+on:
+  push:
+    branches: [feat/embed-web-assets]
+    paths: [.github/workflows/vendor-web-assets.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/embed-web-assets
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Fetch pinned distributions
+        run: |
+          set -eux
+          mkdir -p web/assets .vendor
+          cd .vendor
+          npm pack htmx.org@4.0.0
+          npm pack basecoat-css@1.0.2
+          tar -xzf htmx.org-4.0.0.tgz
+          cp package/dist/htmax.min.js ../web/assets/htmax.min.js
+          rm -rf package
+          tar -xzf basecoat-css-1.0.2.tgz
+          cp package/dist/basecoat.cdn.min.css ../web/assets/basecoat.min.css
+          cd ..
+          rm -rf .vendor
+      - name: Commit vendored assets
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add web/assets/htmax.min.js web/assets/basecoat.min.css
+          git commit -m 'Vendor HTMX 4 and Basecoat assets'
+          git push
