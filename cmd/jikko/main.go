@@ -13,6 +13,7 @@ import (
 	"time"
 
 	jikko "github.com/KakkoiDev/jikko"
+	jikkoweb "github.com/KakkoiDev/jikko/web"
 )
 
 func main() {
@@ -65,6 +66,8 @@ func serve(args []string) {
 	}
 	renderPages := func(r *http.Request) (string, error) { var b bytes.Buffer; err := t.ExecuteTemplate(&b, "pages", data(r)); return b.String(), err }
 
+	// The browser runtime is compiled into the Go binary: no CDN and no npm at runtime.
+	http.Handle("/assets/", http.FileServer(http.FS(jikkoweb.Assets)))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" { http.NotFound(w, r); return }
 		if err := t.ExecuteTemplate(w, "page", data(r)); err != nil { http.Error(w, err.Error(), 500) }
@@ -77,7 +80,6 @@ func serve(args []string) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-
 		previous, err := renderPages(r); if err != nil { return }
 		ticker := time.NewTicker(time.Second); defer ticker.Stop()
 		for {
@@ -86,7 +88,6 @@ func serve(args []string) {
 			if current != previous { fmt.Fprintf(w, "data: %s\n\n", oneLine(current)); flusher.Flush(); previous = current }
 		}
 	})
-
 	log.Printf("Jikko: http://%s", *addr); log.Fatal(http.ListenAndServe(*addr, nil))
 }
 
@@ -98,10 +99,8 @@ const pageHTML = `{{define "page"}}<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Jikko</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/basecoat-css@1.0.2/dist/basecoat.cdn.min.css">
-<script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/htmx.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-live.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.min.js"></script>
+<link rel="stylesheet" href="/assets/basecoat.min.css">
+<script src="/assets/htmax.min.js"></script>
 </head>
 <body class="bg-background text-foreground">
 <main class="mx-auto max-w-4xl p-6 md:p-10">
