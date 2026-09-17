@@ -18,17 +18,19 @@ const (
 	Document Kind = "document"
 	Task     Kind = "task"
 	View     Kind = "view"
+	Identity Kind = "identity"
 )
 
 type Page struct {
-	Path       string         `json:"path"`
-	Title      string         `json:"title"`
-	Kind       Kind           `json:"type"`
-	Metadata   map[string]any `json:"metadata,omitempty"`
-	Body       string         `json:"body,omitempty"`
-	Links      []string       `json:"links,omitempty"`
-	Embeds     []string       `json:"embeds,omitempty"`
-	Backlinks  []string       `json:"backlinks,omitempty"`
+	Path      string         `json:"path"`
+	Title     string         `json:"title"`
+	Kind      Kind           `json:"type"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	Body      string         `json:"body,omitempty"`
+	Links     []string       `json:"links,omitempty"`
+	Embeds    []string       `json:"embeds,omitempty"`
+	Backlinks []string       `json:"backlinks,omitempty"`
+	Members   []string       `json:"members,omitempty"`
 }
 
 type Workspace struct {
@@ -48,6 +50,7 @@ func Open(root string) (*Workspace, error) {
 			if d.Name() == ".git" || d.Name() == ".data" { return filepath.SkipDir }
 			return nil
 		}
+		if d.Name() == ".auth.md" { return nil }
 		if strings.EqualFold(filepath.Ext(path), ".md") {
 			p, err := parseFile(root, path)
 			if err != nil { return err }
@@ -57,6 +60,7 @@ func Open(root string) (*Workspace, error) {
 	})
 	if err != nil { return nil, err }
 	w.deriveBacklinks()
+	if err := w.ValidateIdentities(); err != nil { return nil, err }
 	return w, nil
 }
 
@@ -70,10 +74,11 @@ func parseFile(root, path string) (*Page, error) {
 	rel = filepath.ToSlash(rel)
 	kind := Document
 	if t, ok := meta["type"].(string); ok {
-		switch t { case "task": kind = Task; case "view": kind = View; case "document", "": kind = Document }
+		switch t { case "task": kind = Task; case "view": kind = View; case "identity": kind = Identity; case "document", "": kind = Document }
 	}
 	if kind == View && strings.TrimSpace(body) != "" { return nil, errors.New(rel + ": views must not contain a Markdown body") }
 	p := &Page{Path: rel, Title: titleOf(body, rel), Kind: kind, Metadata: meta, Body: body}
+	if kind == Identity { p.Members = stringList(meta["members"]) }
 	for _, m := range refRE.FindAllStringSubmatch(body, -1) {
 		ref := strings.TrimSpace(strings.SplitN(m[2], "|", 2)[0])
 		if m[1] == "!" { p.Embeds = append(p.Embeds, ref) } else { p.Links = append(p.Links, ref) }
@@ -92,6 +97,19 @@ func parseMarkdown(s string) (map[string]any, string, error) {
 	return meta, body, nil
 }
 
+func stringList(v any) []string {
+	switch x := v.(type) {
+	case string:
+		if x == "" { return nil }; return []string{x}
+	case []any:
+		out := make([]string, 0, len(x)); for _, v := range x { if s, ok := v.(string); ok { out = append(out, s) } }; return out
+	case []string:
+		return append([]string(nil), x...)
+	default:
+		return nil
+	}
+}
+
 func titleOf(body, path string) string {
 	for _, line := range strings.Split(body, "\n") {
 		if strings.HasPrefix(line, "# ") { return strings.TrimSpace(strings.TrimPrefix(line, "# ")) }
@@ -108,6 +126,10 @@ func (w *Workspace) Resolve(ref string) (*Page, bool) {
 		if stem == ref || (!strings.Contains(ref, "/") && strings.TrimSuffix(filepath.Base(path), ".md") == ref) { matches = append(matches, p) }
 	}
 	return firstUnique(matches)
+}
+
+func (w *Workspace) ResolveIdentity(ref string) (*Page, bool) {
+	p, ok := w.Resolve(ref); return p, ok && p.Kind == Identity
 }
 
 func firstUnique(p []*Page) (*Page, bool) { if len(p) == 1 { return p[0], true }; return nil, false }
