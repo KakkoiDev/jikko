@@ -1,6 +1,6 @@
 # Identity and Permissions
 
-This document is normative for the Jikko v1 identity and authorization model. It supersedes the older `Group` and namespaced-identity design in `specification-v1.md` until that specification is consolidated.
+This document is normative for the Jikko v1 identity, authentication boundary, and authorization model. It supersedes the older `Group` and namespaced-identity design in `specification-v1.md` until that specification is consolidated.
 
 ## 1. Identity is the primitive
 
@@ -88,13 +88,55 @@ assignee: alice = responsibility
 
 A group mention remains a reference to the group Identity. It MUST NOT be rewritten into the current member list; membership may change while authored intent must remain stable.
 
-## 3. Identity is not authentication
+## 3. Identity and authentication
 
 An Identity file states who/what exists in the workspace. It does not prove that the current caller owns that identity.
 
-Authentication is a harness concern. A browser session, CLI environment, API credential, operating-system identity, or another trusted mechanism may authenticate a caller and map it to a Jikko Identity.
+Authentication is a harness concern. A browser session, CLI environment, API credential, operating-system identity, OAuth provider, SSH key, or another trusted mechanism may authenticate a caller and map it to exactly one Jikko Identity.
 
-Credentials, passwords, API tokens, private keys, and similar secrets MUST NOT be stored in Identity Markdown files merely to implement Jikko authentication.
+Portable Jikko Markdown standardizes identities and authorization, not authentication technology. Harnesses MAY choose their own authentication mechanism.
+
+Credentials, passwords, bearer tokens, private keys, and similar secrets MUST NOT be stored in portable Identity Markdown files merely to implement Jikko authentication. This is especially important for Git-backed workspaces because removing a committed secret from the current file does not remove it from repository history.
+
+### 3.1 Reference harness authentication
+
+The reference Go harness SHOULD initially implement a deliberately small token-based authentication mechanism.
+
+A local `.auth.md` file at the workspace root maps credential hashes to individual Jikko Identities. `.auth.md` is harness-local configuration, not a Jikko Document and not portable workspace source. It MUST be excluded from normal workspace indexing and MUST be gitignored.
+
+Conceptual shape:
+
+```md
+---
+credentials:
+  - identity: alice
+    token_hash: "..."
+  - identity: codex
+    token_hash: "..."
+---
+```
+
+The reference harness MUST store only a cryptographic hash of each bearer token, never the bearer token itself. Tokens MUST be generated using a cryptographically secure random source and contain sufficient entropy to resist guessing.
+
+A conceptual CLI flow is:
+
+```sh
+jikko auth create alice
+```
+
+The harness generates a token, stores its hash in `.auth.md`, and displays the token once. The caller presents that token to authenticate as `alice`.
+
+Multiple credentials MAY map to the same individual Identity so that credentials can be independently created and revoked without changing the Identity file.
+
+For browser use, the permanent bearer token SHOULD be exchanged for a normal secure session rather than retransmitted unnecessarily on every request. Browser session cookies SHOULD use appropriate `HttpOnly`, `Secure`, and same-site protections when applicable.
+
+The harness MUST refuse to treat an Identity with `members` as the direct authenticated caller. Authentication resolves to an individual Identity; group membership and permissions are then derived from the identity graph.
+
+`.auth.md` contains security-sensitive authentication state even though it stores hashes rather than plaintext bearer tokens. It MUST NOT be treated as disposable `.data`, and deleting `.data` MUST NOT affect authentication credentials.
+
+The reference harness SHOULD ensure `.auth.md` is present in `.gitignore`. If `.auth.md` is already tracked by Git, it SHOULD warn prominently and avoid implying that merely adding it to `.gitignore` removes prior credential hashes from Git history.
+
+Cloning a Jikko repository therefore copies identities and permissions but intentionally does not copy reference-harness credentials. Authentication must be established locally on the new harness.
 
 Jikko authorization governs operations performed through a Jikko harness. Direct filesystem, Git, repository-host, and operating-system access are separate security boundaries. An actor with unrestricted direct filesystem write access can bypass Jikko-level authorization.
 
@@ -202,7 +244,8 @@ Keep the model small:
 - no `kind: human|agent|group` unless a real semantic requirement appears;
 - no separate Role primitive;
 - no implicit `everyone` identity is required for open access;
-- no credentials in Markdown;
+- no authentication secrets in portable Identity Markdown;
+- `.auth.md` is reference-harness-local, gitignored security state rather than portable Jikko source or disposable `.data`;
 - no duplicated reverse membership;
 - no permission inheritance in v1;
 - no deny rules in v1;
@@ -224,4 +267,8 @@ FILE
 │   └── @mention
 └── access
     └── permissions: read | comment | write | admin
+
+REFERENCE HARNESS AUTH
+└── .auth.md (gitignored)
+    └── token hash -> individual Identity
 ```
