@@ -10,63 +10,49 @@ Its portable source format is intentionally small:
 .md files
     |
     +-- YAML metadata
-    |
     +-- Markdown body
-    |
     +-- [[references]]
-    |
     +-- ![[embeds]]
+    +-- inline comments and @mentions
 ```
 
 Jikko separates portable authored data from runtime capabilities.
 
 > **The files describe what things are and explicitly relate them. The harness determines what can be done with that information.**
 
-The specification defines source semantics. It does not prescribe a particular application, database, index implementation, user interface, or agent runtime.
-
 ## 2. Design principles
 
 1. Markdown files are the source of truth.
 2. Ordinary Markdown should work without conversion.
-3. Add explicit semantics only when ambiguity would otherwise matter.
+3. Add explicit semantics only when ambiguity matters.
 4. Prefer composition over inheritance.
 5. Store authored facts; derive what can be reliably derived.
 6. Preserve unknown metadata.
 7. Keep folders organizational rather than semantic.
 8. Keep derived runtime data disposable and reproducible.
-9. Do not add a core primitive until substantially different real workflows demonstrate that it is necessary.
+9. Git provides audit/history and text merge for the reference harness; Git does not replace Jikko semantics.
+10. Do not add a primitive until substantially different workflows demonstrate that it is necessary.
 
 ## 3. Fundamental file semantics
 
-Every Jikko source object is a Markdown file consisting of optional YAML frontmatter and a Markdown body.
+Every Jikko source object is a Markdown file with optional YAML frontmatter and a Markdown body.
+
+```text
+no type       -> Document
+type: task    -> Task
+type: view    -> View
+type: group   -> Group
+```
 
 ### 3.1 Document
 
-A Markdown file without a `type` property is a **Document**.
+A Markdown file without `type` is a Document. A harness MAY accept `type: document`, but MUST NOT require it.
 
-```md
----
-tags: [architecture]
----
-
-# Authentication
-
-Here's how authentication works...
-```
-
-A harness MAY accept `type: document` for explicitness, but it MUST NOT require it.
-
-Documents contain information and may compose other files through embeds.
+Documents hold information, compose other files, and may contain inline review/discussion. A document can therefore also serve as a durable coordination/message board without introducing Chat or Message primitives.
 
 ### 3.2 Task
 
-A Task is explicitly declared with:
-
-```yaml
-type: task
-```
-
-Example:
+A Task is explicitly declared with `type: task`.
 
 ```md
 ---
@@ -74,7 +60,8 @@ type: task
 status: doing
 start: 2026-09-15
 due: 2026-09-20
-tags: [architecture, authentication]
+tags: [architecture]
+assignee: agent:codex
 ---
 
 # Implement session persistence
@@ -82,19 +69,13 @@ tags: [architecture, authentication]
 Implement the approach described in [[authentication-architecture]].
 ```
 
-Task metadata is extensible. Common properties include `status`, `start`, `due`, and `tags`, but the core specification does not require a large task-management schema.
+Task metadata is extensible. Common properties include `status`, `start`, `due`, and `tags`. A field such as `status` MUST NOT implicitly turn a document into a task.
 
-A field such as `status` MUST NOT implicitly turn a document into a task. Ordinary documents may legitimately have values such as `status: draft` or `status: approved`.
+`assignee` is responsibility/ownership; an `@mention` is attention. They are not equivalent.
 
 ### 3.3 View
 
-A View is explicitly declared with:
-
-```yaml
-type: view
-```
-
-A View is a pure selection/query plus optional presentation hints.
+A View is explicitly declared with `type: view`. A View is a pure selection/query plus optional presentation hints.
 
 ```md
 ---
@@ -110,282 +91,259 @@ view:
 ---
 ```
 
-A View MUST NOT use its Markdown body for arbitrary narrative content or stored query results.
+A View MUST NOT use its body for arbitrary narrative content or stored query results. Narrative composition belongs in a Document.
 
-Narrative content that composes views belongs in a Document.
+### 3.4 Group
+
+A Group is explicitly declared with `type: group`.
+
+```md
+---
+type: group
+members:
+  - human:alice
+  - agent:codex
+---
+
+# Maintainers
+```
+
+Groups are a core primitive because membership is expected to participate in mentions, assignment, identity organization, and authorization/admin roles.
+
+Canonical actor identities use namespaces such as `human:name` and `agent:name`. Group references use `group:name`.
+
+A group MAY later carry authorization policy, but the exact permissions schema is an open design question. A group that participates in authorization MUST NOT be self-escalatable through an operation the requesting actor is not already authorized to perform.
+
+Jikko authorization applies to actions through the harness. Direct filesystem/Git access remains governed by the operating system and repository access; Jikko MUST NOT pretend to sandbox an actor that already has unrestricted filesystem write access.
 
 ## 4. Metadata
 
-Jikko uses YAML frontmatter for structured metadata.
-
-Properties not defined by the core specification are allowed.
-
-```yaml
-client: acme
-priority: high
-course: japanese
-invoice: 2026-0042
-species: duck
-```
-
-Harnesses SHOULD preserve unknown properties when modifying files.
-
-The core does not define `project`, `sprint`, `milestone`, `assignee`, `estimate`, `department`, or similar workflow-specific concepts. Such concepts can be represented by ordinary properties, tags, documents, links, and views.
+Jikko uses YAML frontmatter for structured metadata. Unknown properties are allowed and SHOULD be preserved by harnesses.
 
 Tags are ordinary metadata. The core imposes no tag hierarchy, inheritance, or namespace semantics.
 
-## 5. References
+Do not store information twice when it can be reliably derived. For example, `@agent:codex` in authored Markdown is sufficient for the harness to derive a mention index; a duplicate `mentions:` property is not required.
+
+## 5. References and embeds
 
 ### 5.1 Links
 
-Authored relationships use wiki-style references:
+Authored relationships use `[[target]]`.
+
+### 5.2 Universal embeds
+
+Composition uses `![[target]]`. Embeds are file-oriented, not media-type-oriented.
+
+Examples:
 
 ```md
-[[authentication-architecture]]
+![[child.md]]
+![[diagram.png]]
+![[demo.mp4]]
+![[meeting.mp3]]
+![[paper.pdf]]
 ```
 
-A link is source data because the author explicitly created the relationship.
+A harness chooses presentation from the resolved target. Markdown renders as document/task/view/group content as appropriate; common media render natively; unknown types fall back to a file card/link.
 
-### 5.2 Embeds
+Embedded Markdown remains a reference to the source file, never a copied representation.
 
-Composition uses:
+## 6. Mermaid
+
+Fenced Mermaid is supported as source Markdown:
+
+````md
+```mermaid
+flowchart LR
+  Markdown --> Go
+  Go --> HTML
+```
+````
+
+The diagram source remains canonical. Browser rendering MUST use a reviewed security configuration. Editing exposes source, not a generated image as canonical data.
+
+## 7. References, rename integrity, and resolution
+
+Jikko prefers readable filenames/paths over mandatory UUIDs. Bare names may resolve when unambiguous; paths disambiguate duplicates.
+
+Renames through the harness are semantic operations. The default rename SHOULD:
+
+1. resolve inbound `[[links]]` and `![[embeds]]`;
+2. rename the target;
+3. rewrite safely resolvable authored references;
+4. run integrity checks and report unresolved/ambiguous references.
+
+A no-rewrite/filesystem-only mode MAY exist, but MUST warn which known references will break.
+
+External renames cannot always be inferred safely. `jikko check` MUST report broken references rather than guess.
+
+Backlinks remain derived data.
+
+## 8. Inline comments and review
+
+Comments are not a separate core file type. Unresolved comments are authored review state inside the Markdown file being discussed.
+
+The design direction is explicit HTML-comment markers around the anchored source plus an in-file thread. The exact serialization MUST be parser-tested before being frozen, but clarity is preferred over abbreviations. The provisional shape is:
 
 ```md
-![[target]]
+The harness should <!--comment:c17-->automatically update references<!--/comment:c17-->
+when a file is renamed.
+
+<!--comment-thread:c17
+@human:alice: Should normal links update too?
+
+@agent:codex: Yes, links and embeds.
+-->
 ```
 
-Embedding is universal. Depending on the resolved target, a harness may render:
+Requirements:
 
-- a Document as document content,
-- a Task as an actionable task representation,
-- a View as its evaluated live result.
+- the anchor physically moves with the Markdown it annotates;
+- raw Markdown remains understandable in ordinary editors;
+- comments and replies are visible to Git history/diff;
+- duplicate comment IDs are detectable;
+- deleting commented content requires explicitly dealing with its comment markers/thread rather than silently orphaning discussion;
+- the browser presents threads in a sidebar while preserving source-first editing;
+- unresolved comments can be queried by the CLI/harness;
+- completing a Task with unresolved comments SHOULD warn initially rather than being unconditionally forbidden.
 
-This makes a dashboard simply a Document composed from other objects rather than a separate core type.
+Resolving a comment removes its active markers/thread from current Markdown after the decision is incorporated. Git history retains the historical discussion for audit/review.
+
+Current Markdown therefore contains current unresolved discussion; Git contains historical discussion.
+
+## 9. Identity, mentions, assignment, and notifications
+
+Canonical mention syntax is source-native:
 
 ```md
-# Product Development
-
-Our immediate objective is to make the product usable end-to-end.
-
-## Design
-
-![[design-work]]
-
-## Engineering
-
-![[engineering-work]]
-
-## Important Task
-
-![[implement-authentication]]
-
-See [[architecture]] for broader reasoning.
+@human:alice
+@agent:codex
+@group:maintainers
 ```
 
-Jikko v1 does not define embed presentation modifiers.
+Namespaces keep human, agent, and group identities unambiguous. A UI MAY render friendlier labels while preserving canonical source.
 
-## 6. Reference resolution
-
-Jikko prefers human-readable filenames and paths rather than mandatory opaque identifiers.
-
-For example:
-
-```md
-[[design]]
-```
-
-may resolve to `design.md` when unambiguous.
-
-When names collide, paths can disambiguate:
-
-```md
-[[client-a/design]]
-```
-
-Harnesses that rename files SHOULD update references they can safely resolve.
-
-Mandatory UUIDs are not part of v1.
-
-## 7. Backlinks and derived relationships
-
-Backlinks are derived data.
-
-If `bar.md` contains:
-
-```md
-[[foo]]
-```
-
-then the authored fact is that `bar` references `foo`. The reverse statement, that `foo` is referenced by `bar`, should be derived by the harness rather than written into `foo.md`.
-
-The same principle applies to search indexes, graph edges inferred from links, parsed Markdown caches, and query results.
-
-## 8. Harness
-
-A **harness** is any runtime that interprets a Jikko workspace.
-
-A harness may be a:
-
-- web application,
-- CLI or TUI,
-- editor plugin,
-- desktop or mobile application,
-- AI-agent runtime,
-- or another compatible environment.
-
-A harness may provide capabilities such as:
-
-- full-text search,
-- metadata search,
-- backlinks,
-- reference resolution,
-- autocomplete,
-- file exploration,
-- rendering,
-- query evaluation,
-- tables,
-- boards,
-- calendars,
-- timelines,
-- graph visualization,
-- indexes and caches.
-
-These capabilities are not themselves source-file semantics.
-
-## 9. Build and derived data
-
-A harness MAY build derived data from the Markdown workspace.
-
-Conceptually:
+Mention semantics:
 
 ```text
-                SOURCE
-                  │
-              *.md files
-                  │
-          ┌───────┴───────┐
-          │               │
-       content         metadata
-          │               │
-          └───────┬───────┘
-                  ↓
-              BUILD STEP
-                  ↓
-          derived index/cache
-                  ↓
-              HARNESS
-        ┌─────────┼─────────┐
-        ↓         ↓         ↓
-      search    links     views
+@mention = attention
+assignee = responsibility
 ```
 
-A harness may choose to store this under `.data`, but `.data` is not a standardized part of the portable Jikko format.
+Mentions are authored facts. Mention indexes, inboxes, notification badges, and delivery state are derived by the harness.
 
-Different harnesses may use JSON, SQLite, IndexedDB, binary indexes, in-memory structures, or no persistent index.
+The harness SHOULD expose current mentions to browser, CLI, and agents, for example conceptually:
 
-The required conceptual invariant is:
+```sh
+jikko mentions --for agent:codex --json
+jikko watch --for agent:codex
+```
+
+Notification delivery is not Markdown source. Browser notifications, SSE, polling, OS notifications, or future adapters are harness capabilities. Disposable runtime state MAY remember which mention event/revision was already delivered; deleting that state may cause duplicate notifications but MUST NOT lose workspace information.
+
+Groups are resolved as groups, not expanded by rewriting source mentions into individual mentions. Group membership changes therefore do not alter the historical authored intent of `@group:name`.
+
+## 10. Git-backed history and audit
+
+The reference harness SHOULD use real Git rather than implement a proprietary history store, diff engine, or three-way merge algorithm.
+
+Git provides:
+
+- immutable historical snapshots/commits,
+- diffs,
+- rename history,
+- revert capability,
+- audit history,
+- and mature three-way text merge behavior.
+
+Jikko continues to own semantic operations such as reference resolution, rename rewriting, task mutation, comment handling, uploads, and views.
+
+A Jikko workspace remains valid Markdown without Git, but history, audit, historical review, and automatic three-way conflict handling may be unavailable. The reference harness SHOULD make Git initialization easy and warn when history guarantees are unavailable.
+
+Successful semantic mutations SHOULD be commit-able as one logical transaction. For example, uploading an asset and inserting its embed should form one history event rather than unrelated changes.
+
+Actor attribution SHOULD be carried by the mutation context and may be stored in structured Git commit trailers such as `Jikko-Actor` and `Jikko-Operation`. Do not automatically inject `updated_by` into every Markdown file.
+
+## 11. Concurrent edits
+
+Do not introduce CRDT/OT infrastructure until real simultaneous character-level coediting demonstrates a need.
+
+Use optimistic concurrency around file/revision identity:
+
+```text
+read base revision A
+       |
+actor edits
+       |
+save against A
+       |
+current still A? -- yes --> save/commit
+       |
+       no
+       v
+three-way merge using base + actor edit + current
+       |
+clean? -- yes --> save/commit
+       |
+       no
+       v
+structured conflict for human/agent resolution
+```
+
+Git should provide the mature three-way merge machinery where practical; Jikko provides browser/CLI conflict UX. The browser should not expose raw conflict markers by default. Agents should receive deterministic structured conflict output.
+
+SSE may notify open browser sessions when a source file changes externally, reducing avoidable conflicting saves.
+
+## 12. Uploads and asset size
+
+Uploads are ordinary workspace files and, by default, participate in Git history. Browser upload entry points include drag/drop, clipboard paste, `+` insertion, and accessible file picker. Show real byte progress when available and an indeterminate state otherwise.
+
+CLI/agent upload must perform the same core operation, e.g. conceptually:
+
+```sh
+jikko upload ./diagram.png
+jikko upload ./diagram.png --into architecture.md --json
+```
+
+The reference harness MUST impose a configurable maximum upload size to avoid accidentally placing impractically large binary files into ordinary Git history. The initial limit should be chosen from testing rather than premature optimization.
+
+**Open design question:** large binary asset storage. Git LFS or another local/remote large-file mechanism may eventually be useful, but it is deliberately not a v1 dependency. Any future design must consider local hosting, portability, deletion/garbage collection, and the complexity of introducing a second storage system.
+
+## 13. Harness and derived data
+
+A harness interprets a Jikko workspace and may provide search, backlinks, reference resolution, autocomplete, rendering, query evaluation, views, notifications, history UI, indexes, and caches.
+
+Derived data MAY be stored under `.data`, but `.data` is not portable source and is not standardized.
+
+Required invariant:
 
 ```text
 delete derived data
 +
-rebuild from Markdown
+rebuild from Markdown (+ Git history where the feature explicitly concerns history)
 =
 equivalent runtime state
 ```
 
 Derived data SHOULD normally be excluded from version control.
 
-Derived storage should behave as an index/cache, not as an authoritative generated copy of the workspace.
+## 14. View purity and composition
 
-## 10. View evaluation
+Views remain pure queries. Documents provide narrative composition. Do not add view inheritance, dashboards, master views, projects, or templating systems as core primitives.
 
-A View separates selection from presentation.
+Composition uses `![[...]]`; composition, never inheritance, remains a design constraint.
 
-```yaml
-filter:
-  type: task
-  tags: [design]
-  status: [todo, doing]
+## 15. Folder semantics
 
-view:
-  layout: board
-  group: status
-  sort: due
-```
+Folders organize files but carry no Jikko semantics. Meaning comes from content and metadata, not directory placement.
 
-`filter` describes **what** is selected and is part of the portable query semantics.
+## 16. Rendering safety
 
-`view` describes **how** a harness may present the selection. A harness MAY ignore unsupported presentation hints while still evaluating the filter.
+A rendering harness MUST detect recursive embed cycles and stop expansion safely.
 
-Jikko v1 deliberately avoids SQL and a general-purpose expression language. Query semantics should expand only in response to demonstrated use cases.
+## 17. Non-goals for v1
 
-View results SHOULD normally be evaluated dynamically against the harness index rather than stored in source files or pre-materialized during every build.
-
-## 11. View purity and composition
-
-Views remain pure queries.
-
-Documents provide narrative composition.
-
-Jikko v1 does not define view inheritance, `extends`, dashboards, master views, projects, or templating systems.
-
-The preferred mechanism is composition:
-
-```md
-![[design-work]]
-![[engineering-work]]
-```
-
-rather than inheritance:
-
-```yaml
-extends: architecture
-```
-
-**Composition, never inheritance**, is a v1 design constraint.
-
-## 12. Folder semantics
-
-Folders organize files but carry no Jikko semantics.
-
-Both of these layouts are valid:
-
-```text
-workspace/
-├── docs/
-├── tasks/
-├── views/
-├── clients/
-└── archive/
-```
-
-and:
-
-```text
-workspace/
-├── website/
-│   ├── architecture.md
-│   ├── fix-mobile.md
-│   └── open-work.md
-└── accounting/
-```
-
-The meaning of a file comes from its content and metadata, not its directory.
-
-## 13. Rendering safety
-
-Composition can be recursive. A workspace may accidentally contain cycles:
-
-```text
-A embeds B
-B embeds A
-```
-
-The source files remain valid, but a rendering harness MUST detect recursive embed cycles and stop expansion safely.
-
-## 14. Non-goals for v1
-
-The following are deliberately not core primitives:
+The following are deliberately not separate core primitives:
 
 - Project
 - Sprint
@@ -394,54 +352,42 @@ The following are deliberately not core primitives:
 - Collection
 - Milestone
 - Person
+- Agent
+- Message
+- Chat
+- Comment
 - Department
 - Workspace hierarchy
 - View inheritance
 - Tag inheritance
 - Materialized view results
 - Mandatory UUIDs
-- A standardized `.data` format
-- A general templating language
-- Rich embed modifier syntax
+- standardized `.data`
+- general templating language
+- rich embed modifier syntax
+- CRDT/OT collaboration
+- Git LFS/large-file subsystem
 
-Their absence is intentional. They may be represented through existing primitives or reconsidered only after real usage demonstrates a missing capability.
+`Group` is intentionally a core primitive because it has earned semantics across addressing, assignment/organization, and authorization.
 
-## 15. Core summary
+## 18. Core summary
 
 ```text
-DOCUMENT = information and composition
+DOCUMENT = information, composition, and durable discussion surface
 TASK     = information with explicit actionable semantics
 VIEW     = pure selection plus presentation hints
+GROUP    = named actor membership for addressing and authorization
 
 LINK     = authored relationship
 BACKLINK = derived relationship
 EMBED    = composition
-.data    = disposable harness-specific index/cache
+COMMENT  = authored unresolved review state inside Markdown
+MENTION  = authored request for attention
+ASSIGNEE = authored responsibility
+GIT      = reference harness history/audit/merge substrate
+.data    = disposable harness-specific index/cache/delivery state
 ```
 
-Storage-level semantics:
+## 19. Design test
 
-```text
-no type       -> Document
-type: task    -> Task
-type: view    -> View
-```
-
-## 16. v1 design test
-
-Before expanding the format, Jikko should be exercised against substantially different workflows, including:
-
-- software development,
-- personal task management,
-- research,
-- teaching/course preparation,
-- sales pipeline,
-- event planning,
-- long-form writing,
-- CRM,
-- home renovation,
-- recurring operational work.
-
-A useful next step is to create a representative fixture workspace of roughly fifteen Markdown files spanning these workflows and identify concrete points of friction.
-
-The specification should evolve from those failures rather than from speculative abstractions.
+Exercise the format against substantially different workflows before expanding it further: software development, personal tasks, research, teaching, sales, events, long-form writing, CRM, home renovation, and recurring operations. Add primitives only when real failures demonstrate missing semantics.

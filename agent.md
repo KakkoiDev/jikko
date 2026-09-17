@@ -1,49 +1,87 @@
 # Jikko Agent Guide
 
-Read this first if you are an AI agent working on Jikko. It is intentionally short. For format details see `specification-v1.md`; for browser details see `architecture-browser.md`.
+Read this first if you are an AI agent working on Jikko. It is intentionally short. For format details see `specification-v1.md`; for browser/product details see `architecture-browser.md` and `ux-plan.md`.
 
 ## What Jikko is
 
-Jikko is an executable Markdown workspace for humans and agents. Markdown files are the source of truth. The Go harness interprets them and exposes the same semantics through a CLI and a server-rendered browser UI.
-
-```text
-.md files
-  |
-  +-- YAML frontmatter
-  +-- Markdown body
-  +-- [[links]]
-  +-- ![[embeds]]
-```
-
-Semantic convention:
+Jikko is an executable Markdown workspace for humans and agents. Markdown files are the source of truth. The Go harness exposes the same semantics through CLI and browser.
 
 ```text
 no type       -> Document
 type: task    -> Task
 type: view    -> View
+type: group   -> Group
 ```
 
-Documents contain information and compose things. Tasks are documents with explicit actionable semantics. Views are pure queries plus optional presentation hints.
-
-## The invariant
+Document = information, composition, and durable discussion surface. Task = explicit actionable semantics. View = pure query + presentation hints. Group = named actor membership used for addressing and future authorization.
 
 > The files describe what things are and explicitly relate them. The harness determines what can be done with that information.
 
 Never create a second source of truth.
 
-## Source vs derived state
+## Source and derived state
 
-Authored/source data belongs in Markdown. Backlinks, search indexes, parsed Markdown, query results, graph data, caches, rendered views, and autocomplete are derived by the harness.
+Authored/source data includes Markdown, YAML, `[[links]]`, `![[embeds]]`, inline unresolved comments, and `@mentions`.
 
-If persistent `.data` is introduced, it must remain disposable and reproducible from Markdown. Do not standardize a `.data` format as part of Jikko compatibility.
+Backlinks, search indexes, mention indexes/inboxes, rendered views, caches, notification-delivery state, and similar runtime data are derived. Persistent `.data`, if used, must remain disposable/reproducible.
 
-## Go harness
+Git is the reference harness substrate for audit/history/diff/three-way merge. Git does not replace Jikko semantic operations.
 
-The Go core owns parsing, indexing, reference resolution, backlinks, queries, and other Jikko semantics. CLI and HTTP are adapters around that core.
+## Identity and collaboration
 
-For agents, prefer the CLI for semantic operations and deterministic `--json` output. Direct Markdown edits are fine for complex content, followed by `jikko check`.
+Canonical identities:
 
-Do not make the CLI a second data model: a CLI mutation should only perform a safe structured edit of Markdown.
+```text
+human:alice
+agent:codex
+group:maintainers
+```
+
+Canonical mentions:
+
+```md
+@human:alice
+@agent:codex
+@group:maintainers
+```
+
+A mention means **attention**. `assignee:` means **responsibility**. Do not treat them as equivalent and do not duplicate mentions into frontmatter merely for indexing.
+
+Agents should query unresolved mentions/tasks through deterministic CLI/JSON interfaces. Notification delivery is derived runtime behavior, not source.
+
+## Comments
+
+Comments are unresolved review state inside the Markdown they discuss, not separate Comment/Message files. Current provisional source shape:
+
+```md
+This should <!--comment:c17-->update references<!--/comment:c17-->.
+
+<!--comment-thread:c17
+@agent:codex: Please verify links and embeds.
+-->
+```
+
+The exact serialization is not frozen until parser compatibility is tested. Use explicit `comment` naming, not opaque shorthand.
+
+Resolving a comment removes active comment markup/thread after incorporating the decision. Git retains historical discussion. Do not silently delete or orphan unresolved comments.
+
+## Go harness and mutations
+
+The Go core owns parsing, indexing, reference resolution, backlinks, mentions, groups, queries, safe mutations, uploads, rename rewriting, comments, and conflict semantics. CLI and HTTP are adapters.
+
+Prefer CLI semantic operations and deterministic `--json`. Direct Markdown edits remain valid for complex content, followed by `jikko check`.
+
+A mutation should carry actor context. Do not automatically write `updated_by` into documents. Audit attribution belongs in Git/history unless identity is part of the authored meaning (for example `assignee: agent:codex`).
+
+Rename through Jikko should update safely resolvable `[[links]]` and `![[embeds]]`. Never assume a filesystem rename preserved references.
+
+Uploads are ordinary workspace files and should use the same core operation from browser and CLI. Respect the configured maximum upload size; large-file storage/LFS is deliberately unresolved.
+
+## Concurrency
+
+Use optimistic revision checks. If the source changed after you read it, use a three-way merge where clean; otherwise return/resolve a structured conflict. Do not blindly overwrite another actor's edit.
+
+Do not add CRDT/OT infrastructure without demonstrated need.
 
 ## Browser rules
 
@@ -54,36 +92,15 @@ HTML     = interactions
 HTMX 4   = requests + swaps
 SSE      = default server -> browser live updates
 hx-live  = tiny local-only browser behavior
-Basecoat = CSS/component presentation
+Basecoat = presentation
 ```
 
-Browser -> server: ordinary HTTP/HTMX.
+Editing is source-first, not WYSIWYG. Render when reading; expose real Markdown in the active edit context. Embedded Markdown is visibly bordered; selecting it reveals its `![[file]]` anchor and actions to open/edit the source file.
 
-Server -> browser: SSE by default.
+Use HTML/CSS first, then `hx-live`; add browser runtime only when accessibility/correctness justifies it. HTMAX/Basecoat assets are embedded in the Go binary.
 
-For local interaction, use HTML/CSS first, then `hx-live`. If a Basecoat component needs JS, first see whether `hx-live` can provide the behavior correctly. Do not add Basecoat JS or another browser framework by reflex. Accessibility/correctness wins if a supported component runtime is genuinely necessary.
+## Composition and development bias
 
-HTMX/HTMAX and Basecoat CSS are vendored and embedded in the Go binary. Jikko should run without CDN/npm/network access.
+Use composition, not inheritance. Views stay pure. Folders have no semantic meaning. Prefer readable paths over mandatory UUIDs. Preserve unknown metadata.
 
-## Composition
-
-Use links and embeds, not inheritance:
-
-```md
-[[architecture]]
-![[open-work]]
-```
-
-A document may embed documents, tasks, or views. Views remain pure: no arbitrary Markdown body and no stored/generated results. Do not add `extends`, dashboard/project/sprint entity types, or template machinery without demonstrated need.
-
-## Metadata
-
-YAML properties are open-ended. Preserve unknown properties. Core task metadata should stay small (`status`, `start`, `due`, `tags`). Project, sprint, priority, assignee, etc. are not core merely because another work-management system has them.
-
-Folders organize files but have no semantic meaning. Prefer readable filenames/paths over mandatory UUIDs. Rename tooling should update references.
-
-## Development bias
-
-Choose the simplest layer that works. Do not add a framework, database, daemon, persistent index, WebSocket, JSON API, inheritance system, or new core primitive until a concrete use case demonstrates the need.
-
-When uncertain, preserve Markdown portability and keep semantics in the Go core rather than an interface.
+Do not add Project, Sprint, Dashboard, Agent, Message, Chat, Comment, database, daemon, WebSocket, persistent index, CRDT, LFS, or another primitive/dependency without a concrete use case. `Group` is the current exception that earned primitive status through addressing and authorization needs.
