@@ -89,7 +89,7 @@ The reference binary embeds its browser assets with Go `embed.FS`. Runtime must 
 
 Pinned assets currently include:
 
-- HTMX 4.0.0 via the HTMAX bundle, including the capabilities used for `hx-live` and `hx-sse`.
+- HTMX 4.0.0 via the vendored `htmx.min.js` bundle, including the capabilities used for `hx-live` and `hx-sse`.
 - Basecoat 1.0.2 CSS.
 
 They are served locally under `/assets/` by `jikko serve`.

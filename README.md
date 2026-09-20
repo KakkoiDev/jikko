@@ -19,6 +19,9 @@ go run ./cmd/jikko serve --dir /path/to/workspace
 ```
 
 Open the address printed by `serve` (currently `http://127.0.0.1:8080` by default).
+It binds to localhost and has no transport security of its own; put it behind a
+TLS-terminating reverse proxy and pass `--behind-proxy` to reach it from
+elsewhere.
 
 A normal document needs no type:
 
@@ -77,7 +80,30 @@ go run ./cmd/jikko check --dir /path/to/workspace
 
 `--json` is intended for agents/scripts. Markdown remains source of truth regardless of whether a human, browser, or agent edits it.
 
-> **Current limitation:** the implementation can inspect and serve a workspace, but the source-first browser editor, comments/mentions/identity collaboration, Git history/merge integration, uploads, media embeds, Mermaid, semantic rename, and mutation commands are roadmap work.
+Authenticated callers can make structured edits. A metadata mutation rewrites
+only the property it names, leaving key order, comments, YAML types, and the
+Markdown body untouched:
+
+```sh
+export JIKKO_TOKEN="$(go run ./cmd/jikko auth create alice --dir /path/to/workspace)"
+go run ./cmd/jikko set session-design status doing --dir /path/to/workspace
+go run ./cmd/jikko perm session-design read alice maintainers --dir /path/to/workspace
+```
+
+`set` refuses to touch `permissions`, because access-control policy is a
+mapping rather than a value; `perm` edits it. Both are judged by their effect:
+a change is rejected if it introduces a workspace problem, widens anyone's
+access beyond what you may administer, or leaves a restricted file with no
+administrator.
+
+`check` reports unresolved references together with workspace problems —
+malformed frontmatter, unknown types, views carrying a body, membership cycles,
+and access policies naming identities that do not resolve. A problem is
+reported rather than fatal, so one bad file never makes the rest of a workspace
+unreadable, but a file whose access policy cannot be evaluated is denied to
+everyone until it is fixed.
+
+> **Current limitation:** the implementation can inspect, mutate, and serve a workspace, but the source-first browser editor, comments/mentions/identity collaboration, Git history/merge integration, uploads, media embeds, Mermaid, and semantic rename are roadmap work.
 
 ## Core model
 
@@ -150,7 +176,7 @@ The CLI is Jikko's initial machine interface. Semantic mutations must remain str
 
 The core currently scans Markdown directly into memory. There is deliberately no database or persistent `.data` index yet.
 
-The browser harness stays server-first: HTMX 4 for requests/swaps, hx-live for tiny local behavior, SSE by default for server-to-browser updates, and Basecoat CSS for presentation. HTMAX 4.0.0 and Basecoat 1.0.2 CSS are vendored/embedded, so runtime does not require CDN/npm/network access.
+The browser harness stays server-first: HTMX 4 for requests/swaps, hx-live for tiny local behavior, SSE by default for server-to-browser updates, and Basecoat CSS for presentation. HTMX 4.0.0 and Basecoat 1.0.2 CSS are vendored/embedded, so runtime does not require CDN/npm/network access.
 
 See [architecture-browser.md](architecture-browser.md) for browser architecture, [agent.md](agent.md) for AI-agent orientation, [ux-plan.md](ux-plan.md) for product/collaboration decisions, and [specification-v1.md](specification-v1.md) for source semantics.
 

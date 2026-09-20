@@ -1,113 +1,303 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-	"html/template"
 	"log"
-	"net/http"
-	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	jikko "github.com/KakkoiDev/jikko"
-	jikkoweb "github.com/KakkoiDev/jikko/web"
 )
 
 func main() {
-	if len(os.Args) < 2 { usage(); return }
-	switch os.Args[1] {
-	case "list": list(os.Args[2:])
-	case "show": show(os.Args[2:])
-	case "auth": auth(os.Args[2:])
-	case "set": set(os.Args[2:])
-	case "serve": serve(os.Args[2:])
-	case "check": check(os.Args[2:])
-	default: usage()
+	log.SetFlags(0)
+	log.SetPrefix("jikko: ")
+	if len(os.Args) < 2 {
+		usage()
+		return
+	}
+	commands := map[string]func([]string) error{
+		"list": list, "show": show, "auth": auth, "set": set,
+		"perm": perm, "serve": serve, "check": check,
+	}
+	run, ok := commands[os.Args[1]]
+	if !ok {
+		usage()
+		os.Exit(2)
+	}
+	if err := run(os.Args[2:]); err != nil {
+		if !errors.Is(err, flag.ErrHelp) {
+			log.Print(err)
+		}
+		os.Exit(1)
 	}
 }
 
-func open(dir string) *jikko.Workspace { w, err := jikko.Open(dir); if err != nil { log.Fatal(err) }; return w }
+func usage() {
+	fmt.Println(`jikko <command> [flags]
 
-func actorFor(w *jikko.Workspace, token string) string {
-	if token == "" { return "" }
-	p, ok := w.Authenticate(token); if !ok { log.Fatal("authentication failed") }
-	return strings.TrimSuffix(p.Path, ".md")
+  list    list pages visible to you
+  show    print one page
+  set     set a metadata property
+  perm    grant or clear a capability on a page
+  auth    create or revoke a credential
+  check   report workspace problems and broken references
+  serve   serve the workspace over HTTP
+
+Set JIKKO_TOKEN for authenticated CLI operations.`)
 }
 
-func list(args []string) {
-	f := flag.NewFlagSet("list", flag.ExitOnError); dir := f.String("dir", ".", "workspace"); typ := f.String("type", "", "document, task, view, or identity"); status := f.String("status", "", "status metadata"); token := f.String("token", os.Getenv("JIKKO_TOKEN"), "bearer token (or JIKKO_TOKEN)"); asJSON := f.Bool("json", false, "JSON output"); f.Parse(args)
-	w := open(*dir); actor := actorFor(w, *token); pages := w.List(jikko.Kind(*typ), *status); visible := pages[:0]
-	for _, p := range pages { if len(jikko.Permissions(p)) == 0 || (actor != "" && w.Allowed(actor, p, jikko.Read)) { visible = append(visible, p) } }
-	if *asJSON { json.NewEncoder(os.Stdout).Encode(visible); return }
-	for _, p := range visible { fmt.Printf("%-9s %s\n", p.Kind, p.Path) }
+// flags builds a flag set carrying the options every command shares and
+// returns the positional arguments. Flags may appear anywhere, so
+// `jikko set task status done --dir w` reads as naturally as the other order.
+func flags(name string, args []string, extra func(*flag.FlagSet)) ([]string, *string, *string, error) {
+	f := flag.NewFlagSet(name, flag.ContinueOnError)
+	dir := f.String("dir", ".", "workspace directory")
+	token := f.String("token", os.Getenv("JIKKO_TOKEN"), "bearer token (or JIKKO_TOKEN)")
+	if extra != nil {
+		extra(f)
+	}
+	var positional []string
+	for {
+		if err := f.Parse(args); err != nil {
+			return nil, dir, token, err
+		}
+		rest := f.Args()
+		if len(rest) == 0 {
+			return positional, dir, token, nil
+		}
+		positional = append(positional, rest[0])
+		args = rest[1:]
+	}
 }
 
-func show(args []string) {
-	f := flag.NewFlagSet("show", flag.ExitOnError); dir := f.String("dir", ".", "workspace"); token := f.String("token", os.Getenv("JIKKO_TOKEN"), "bearer token (or JIKKO_TOKEN)"); asJSON := f.Bool("json", false, "JSON output"); f.Parse(args)
-	if f.NArg() != 1 { log.Fatal("usage: jikko show [--token TOKEN] [--json] <reference>") }
-	w := open(*dir); p, ok := w.Resolve(f.Arg(0)); if !ok { log.Fatal("reference not found or ambiguous") }
-	if len(jikko.Permissions(p)) != 0 { actor := actorFor(w, *token); if actor == "" || !w.Allowed(actor, p, jikko.Read) { log.Fatal("permission denied") } }
-	if *asJSON { json.NewEncoder(os.Stdout).Encode(p); return }
-	fmt.Printf("%s\n\n%s", p.Title, p.Body)
+// openWorkspace loads a workspace and notes, without failing, that it has
+// defects worth inspecting. Content problems never block ordinary reads.
+func openWorkspace(dir string) (*jikko.Workspace, error) {
+	w, err := jikko.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	if n := len(w.Problems); n > 0 {
+		fmt.Fprintf(os.Stderr, "jikko: %d workspace problem(s); run `jikko check` for detail\n", n)
+	}
+	return w, nil
 }
 
-func auth(args []string) {
-	if len(args) < 1 { log.Fatal("usage: jikko auth <create|revoke> <identity>") }
-	f := flag.NewFlagSet("auth", flag.ExitOnError); dir := f.String("dir", ".", "workspace"); f.Parse(args[1:]); if f.NArg() != 1 { log.Fatal("identity required") }
-	w := open(*dir)
+func actorFor(w *jikko.Workspace, token string) (string, error) {
+	if token == "" {
+		return "", nil
+	}
+	p, err := w.Authenticate(token)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(p.Path, ".md"), nil
+}
+
+func parseKindFlag(s string) (jikko.Kind, error) {
+	if s == "" {
+		return "", nil
+	}
+	kind, ok := jikko.ParseKind(s)
+	if !ok {
+		return "", fmt.Errorf("unknown type %q: expected document, task, view, or identity", s)
+	}
+	return kind, nil
+}
+
+func visiblePages(w *jikko.Workspace, actor string, pages []*jikko.Page) []*jikko.Page {
+	visible := make([]*jikko.Page, 0, len(pages))
+	for _, p := range pages {
+		if w.Allowed(actor, p, jikko.Read) {
+			visible = append(visible, p)
+		}
+	}
+	return visible
+}
+
+func list(args []string) error {
+	var typ, status *string
+	var asJSON *bool
+	args, dir, token, err := flags("list", args, func(f *flag.FlagSet) {
+		typ = f.String("type", "", "document, task, view, or identity")
+		status = f.String("status", "", "status metadata")
+		asJSON = f.Bool("json", false, "JSON output")
+	})
+	if err != nil {
+		return err
+	}
+	if len(args) != 0 {
+		return errors.New("usage: jikko list [flags]")
+	}
+	kind, err := parseKindFlag(*typ)
+	if err != nil {
+		return err
+	}
+	w, err := openWorkspace(*dir)
+	if err != nil {
+		return err
+	}
+	actor, err := actorFor(w, *token)
+	if err != nil {
+		return err
+	}
+	visible := visiblePages(w, actor, w.List(kind, *status))
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(visible)
+	}
+	for _, p := range visible {
+		fmt.Printf("%-9s %s\n", p.Kind, p.Path)
+	}
+	return nil
+}
+
+func show(args []string) error {
+	var asJSON *bool
+	args, dir, token, err := flags("show", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
+	if err != nil {
+		return err
+	}
+	if len(args) != 1 {
+		return errors.New("usage: jikko show [flags] <reference>")
+	}
+	w, err := openWorkspace(*dir)
+	if err != nil {
+		return err
+	}
+	actor, err := actorFor(w, *token)
+	if err != nil {
+		return err
+	}
+	p, ok := w.Resolve(args[0])
+	// One answer for absent, ambiguous, and forbidden: a denial must not
+	// disclose that a restricted page exists.
+	if !ok || !w.Allowed(actor, p, jikko.Read) {
+		return errors.New("reference not found, ambiguous, or not permitted")
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(p)
+	}
+	fmt.Printf("%s\n\n%s", p.Title, strings.TrimLeft(p.Body, "\n"))
+	return nil
+}
+
+func set(args []string) error {
+	args, dir, token, err := flags("set", args, nil)
+	if err != nil {
+		return err
+	}
+	if len(args) != 3 {
+		return errors.New("usage: jikko set [flags] <reference> <property> <value>")
+	}
+	w, err := openWorkspace(*dir)
+	if err != nil {
+		return err
+	}
+	actor, err := actorFor(w, *token)
+	if err != nil {
+		return err
+	}
+	if actor == "" {
+		return errors.New("authentication required: pass --token or set JIKKO_TOKEN")
+	}
+	return w.SetMetadata(actor, args[0], args[1], args[2])
+}
+
+func perm(args []string) error {
+	args, dir, token, err := flags("perm", args, nil)
+	if err != nil {
+		return err
+	}
+	if len(args) < 2 {
+		return errors.New("usage: jikko perm [flags] <reference> <read|comment|write|admin> [identity...]")
+	}
+	w, err := openWorkspace(*dir)
+	if err != nil {
+		return err
+	}
+	actor, err := actorFor(w, *token)
+	if err != nil {
+		return err
+	}
+	if actor == "" {
+		return errors.New("authentication required: pass --token or set JIKKO_TOKEN")
+	}
+	return w.SetPermission(actor, args[0], args[1], args[2:]...)
+}
+
+func auth(args []string) error {
+	args, dir, _, err := flags("auth", args, nil)
+	if err != nil {
+		return err
+	}
+	if len(args) != 2 {
+		return errors.New("usage: jikko auth [flags] <create|revoke> <identity>")
+	}
+	w, err := openWorkspace(*dir)
+	if err != nil {
+		return err
+	}
 	switch args[0] {
-	case "create": token, err := w.CreateCredential(f.Arg(0)); if err != nil { log.Fatal(err) }; fmt.Println(token)
-	case "revoke": if err := w.RevokeCredentials(f.Arg(0)); err != nil { log.Fatal(err) }
-	default: log.Fatal("usage: jikko auth <create|revoke> <identity>")
+	case "create":
+		token, err := w.CreateCredential(args[1])
+		if err != nil {
+			return err
+		}
+		if jikko.AuthTrackedByGit(w.Root) {
+			fmt.Fprintln(os.Stderr, "jikko: WARNING: .auth.md is tracked by Git. Credential hashes are in repository history;")
+			fmt.Fprintln(os.Stderr, "jikko:          adding it to .gitignore now does not remove them. Untrack it and rotate tokens.")
+		}
+		fmt.Println(token)
+	case "revoke":
+		return w.RevokeCredentials(args[1])
+	default:
+		return errors.New("usage: jikko auth [flags] <create|revoke> <identity>")
 	}
+	return nil
 }
 
-func set(args []string) {
-	f := flag.NewFlagSet("set", flag.ExitOnError); dir := f.String("dir", ".", "workspace"); token := f.String("token", os.Getenv("JIKKO_TOKEN"), "bearer token (or JIKKO_TOKEN)"); f.Parse(args)
-	if f.NArg() != 3 { log.Fatal("usage: jikko set [--token TOKEN] <reference> <property> <value>") }
-	w := open(*dir); actor := actorFor(w, *token); if actor == "" { log.Fatal("authentication required") }
-	if err := w.SetMetadata(actor, f.Arg(0), f.Arg(1), f.Arg(2)); err != nil { log.Fatal(err) }
-}
-
-func check(args []string) {
-	f := flag.NewFlagSet("check", flag.ExitOnError); dir := f.String("dir", ".", "workspace"); f.Parse(args)
-	w := open(*dir); broken := 0
-	for _, p := range w.Pages { for _, ref := range append(append([]string{}, p.Links...), p.Embeds...) { if _, ok := w.Resolve(ref); !ok { fmt.Printf("%s: unresolved %q\n", p.Path, ref); broken++ } } }
-	if broken > 0 { os.Exit(1) }; fmt.Printf("ok: %d pages\n", len(w.Pages))
-}
-
-type pageData struct { Pages []*jikko.Page; Query string; Actor string }
-
-func serve(args []string) {
-	f := flag.NewFlagSet("serve", flag.ExitOnError); dir := f.String("dir", ".", "workspace"); addr := f.String("addr", "127.0.0.1:8080", "listen address"); f.Parse(args)
-	t := template.Must(template.New("jikko").Parse(pageHTML + pagesHTML))
-	workspace := func() *jikko.Workspace { return open(*dir) }
-	authRequest := func(r *http.Request, w *jikko.Workspace) string { token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")); if token == "" { if c, err := r.Cookie("jikko_token"); err == nil { token = c.Value } }; if token == "" { return "" }; p, ok := w.Authenticate(token); if !ok { return "" }; return strings.TrimSuffix(p.Path, ".md") }
-	data := func(r *http.Request) pageData {
-		w := workspace(); actor := authRequest(r, w); q := r.URL.Query(); filters := url.Values{}
-		if v := q.Get("type"); v != "" { filters.Set("type", v) }; if v := q.Get("status"); v != "" { filters.Set("status", v) }
-		query := ""; if encoded := filters.Encode(); encoded != "" { query = "?" + encoded }
-		pages := w.List(jikko.Kind(q.Get("type")), q.Get("status")); visible := pages[:0]
-		for _, p := range pages { if len(jikko.Permissions(p)) == 0 || (actor != "" && w.Allowed(actor, p, jikko.Read)) { visible = append(visible, p) } }
-		return pageData{Pages: visible, Query: query, Actor: actor}
+func check(args []string) error {
+	var asJSON *bool
+	args, dir, _, err := flags("check", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
+	if err != nil {
+		return err
 	}
-	renderPages := func(r *http.Request) (string, error) { var b bytes.Buffer; err := t.ExecuteTemplate(&b, "pages", data(r)); return b.String(), err }
-	http.Handle("/assets/", http.FileServer(http.FS(jikkoweb.Assets)))
-	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) { if r.Method != http.MethodPost { http.Error(w, "method not allowed", 405); return }; token := r.FormValue("token"); if _, ok := workspace().Authenticate(token); !ok { http.Error(w, "authentication failed", 401); return }; http.SetCookie(w, &http.Cookie{Name:"jikko_token", Value:token, Path:"/", HttpOnly:true, SameSite:http.SameSiteStrictMode, Secure:r.TLS != nil}); http.Redirect(w, r, "/", http.StatusSeeOther) })
-	http.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) { http.SetCookie(w, &http.Cookie{Name:"jikko_token", Value:"", Path:"/", MaxAge:-1, HttpOnly:true, SameSite:http.SameSiteStrictMode, Secure:r.TLS != nil}); http.Redirect(w, r, "/", http.StatusSeeOther) })
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { if r.URL.Path != "/" { http.NotFound(w, r); return }; if err := t.ExecuteTemplate(w, "page", data(r)); err != nil { http.Error(w, err.Error(), 500) } })
-	http.HandleFunc("/pages", func(w http.ResponseWriter, r *http.Request) { if err := t.ExecuteTemplate(w, "pages", data(r)); err != nil { http.Error(w, err.Error(), 500) } })
-	http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) { flusher, ok := w.(http.Flusher); if !ok { http.Error(w, "streaming unsupported", 500); return }; w.Header().Set("Content-Type", "text/event-stream"); w.Header().Set("Cache-Control", "no-cache"); previous, err := renderPages(r); if err != nil { return }; ticker := time.NewTicker(time.Second); defer ticker.Stop(); for { select { case <-r.Context().Done(): return; case <-ticker.C: }; current, err := renderPages(r); if err != nil { return }; if current != previous { fmt.Fprintf(w, "data: %s\n\n", oneLine(current)); flusher.Flush(); previous = current } } })
-	log.Printf("Jikko: http://%s", *addr); log.Fatal(http.ListenAndServe(*addr, nil))
+	if len(args) != 0 {
+		return errors.New("usage: jikko check [flags]")
+	}
+	w, err := jikko.Open(*dir)
+	if err != nil {
+		return err
+	}
+	problems := append([]jikko.Problem(nil), w.Problems...)
+	for _, p := range w.List("", "") {
+		for _, ref := range append(append([]string{}, p.Links...), p.Embeds...) {
+			if _, ok := w.Resolve(ref); !ok {
+				problems = append(problems, jikko.Problem{Path: p.Path, Kind: "reference", Message: fmt.Sprintf("unresolved %q", ref)})
+			}
+		}
+	}
+	if *asJSON {
+		if err := json.NewEncoder(os.Stdout).Encode(struct {
+			Pages    int             `json:"pages"`
+			Problems []jikko.Problem `json:"problems"`
+		}{len(w.Pages), problems}); err != nil {
+			return err
+		}
+	} else {
+		for _, p := range problems {
+			fmt.Printf("%s: [%s] %s\n", p.Path, p.Kind, p.Message)
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%d problem(s) in %d pages", len(problems), len(w.Pages))
+	}
+	if !*asJSON {
+		fmt.Printf("ok: %d pages\n", len(w.Pages))
+	}
+	return nil
 }
-
-func oneLine(s string) string { return string(bytes.ReplaceAll([]byte(s), []byte("\n"), nil)) }
-
-const pageHTML = `{{define "page"}}<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jikko</title><link rel="stylesheet" href="/assets/basecoat.min.css"><script src="/assets/htmax.min.js"></script></head><body class="bg-background text-foreground"><main class="mx-auto max-w-4xl p-6 md:p-10"><header class="mb-8 flex items-center justify-between"><div><h1 class="text-3xl font-semibold tracking-tight">Jikko</h1><p class="text-muted-foreground">Structured work in plain Markdown.</p></div>{{if .Actor}}<form method="post" action="/logout"><span>{{.Actor}}</span> <button class="btn" data-variant="outline">Log out</button></form>{{else}}<form method="post" action="/login" class="flex gap-2"><input name="token" type="password" placeholder="Token" required><button class="btn">Log in</button></form>{{end}}</header><nav class="mb-6 flex gap-2"><button class="btn" data-variant="outline" hx-get="/pages" hx-target="#pages" hx-swap="outerHTML">All</button><button class="btn" data-variant="outline" hx-get="/pages?type=task" hx-target="#pages" hx-swap="outerHTML">Tasks</button><button class="btn" data-variant="outline" hx-get="/pages?type=view" hx-target="#pages" hx-swap="outerHTML">Views</button></nav>{{template "pages" .}}</main></body></html>{{end}}`
-const pagesHTML = `{{define "pages"}}<section id="pages" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML"><div class="item-group">{{range .Pages}}<article class="item" data-variant="outline"><section><h3>{{.Title}}</h3><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.</p></section></article>{{end}}</div></section>{{end}}`
-
-func usage() { fmt.Println("jikko <list|show|set|auth|check|serve>\n\nSet JIKKO_TOKEN for authenticated CLI operations.") }
