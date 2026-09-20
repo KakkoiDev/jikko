@@ -1,6 +1,6 @@
 # Jikko Agent Guide
 
-Read this first if you are an AI agent working on Jikko. For format details see `specification-v1.md`; `identity-permissions.md` is normative for the newer identity/authorization design and supersedes the older Group/namespaced-identity sections until the main specification is consolidated. Browser/product details live in `architecture-browser.md` and `ux-plan.md`.
+Read this first if you are an AI agent working on Jikko. For format details see `specification-v1.md`; `identity-permissions.md` is normative for identity, authentication boundaries, and authorization. Browser/product details live in `architecture-browser.md` and `ux-plan.md`.
 
 ## Core model
 
