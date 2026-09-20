@@ -1,8 +1,10 @@
 # Jikko
 
-**Structured work in plain Markdown — for humans and agents.**
+**Define, discuss, track, prove, and audit work in plain Markdown — for humans and agents.**
 
-Jikko is a filesystem-native format for turning Markdown knowledge into actionable, collaborative work without locking the source into a particular application.
+Jikko is a human-readable workspace where humans and agents define, discuss, track, prove, and audit work together without locking the source into a particular application.
+
+Jikko is the authoritative place for the work. Humans and agents are expected to read the relevant Jikko context before acting and to return goals, discussions, decisions, progress, and evidence to Jikko. External conversations may help, but they are not project knowledge until recorded in the workspace.
 
 A workspace is ordinary files. YAML frontmatter adds explicit semantics, `[[links]]` express relationships, `![[embeds]]` compose files, inline comments keep unresolved review attached to source, and `@mentions` address humans, agents, and groups. Git is planned as the reference harness substrate for audit/history and three-way text merge.
 
@@ -92,6 +94,20 @@ type: group   -> Group
 - **Group** — named actor membership for addressing and future authorization/admin roles.
 
 Comments, Messages, Chats, Humans, and Agents are deliberately not additional file types. Inline unresolved comments live in the Markdown they discuss. Canonical actor/mention namespaces are `human:name`, `agent:name`, and `group:name`; `@mention` means attention while `assignee:` means responsibility.
+
+## Work model
+
+Jikko keeps its conceptual model small. Claim, checkpoint, evidence, decision, and event are capabilities or conventions around Documents and Tasks, not additional content types. The runtime interprets and enforces their semantics through structured mutations, validation, history, and views.
+
+- **Definable** — goals, requirements, acceptance criteria, constraints, and responsibilities can be written clearly.
+- **Discussable** — humans and agents hold persistent discussions through Documents and comments. Discussion is workspace content, not disposable chat.
+- **Trackable** — Tasks expose their state, assignee, dependencies, blockers, and progress.
+- **Provable** — completion can be supported by commits, tests, files, measurements, screenshots, external references, or review approval.
+- **Auditable** — Git history and Jikko activity/history expose who changed what, when, and why.
+
+The runtime must help users satisfy this model without multiplying primitives: validate structured fields and references, expose unresolved discussion and incomplete work, preserve actor attribution, require authorization for mutations, and warn or reject completion when configured proof requirements are unmet.
+
+> **If work matters to the project, it belongs in Jikko.**
 
 ## Source-first collaboration direction
 
