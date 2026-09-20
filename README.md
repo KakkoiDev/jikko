@@ -43,20 +43,20 @@ assignee: agent:codex
 @agent:codex follow [[session-design]].
 ```
 
-A group is explicit:
+An identity may represent an individual or a group:
 
 ```md
 ---
-type: group
+type: identity
 members:
-  - human:alice
-  - agent:codex
+  - alice
+  - codex
 ---
 
 # Maintainers
 ```
 
-Mention it with `@group:maintainers`.
+Mention it with `@maintainers`.
 
 Compose another file with an embed:
 
@@ -82,18 +82,18 @@ go run ./cmd/jikko check --dir /path/to/workspace
 ## Core model
 
 ```text
-no type       -> Document
-type: task    -> Task
-type: view    -> View
-type: group   -> Group
+no type        -> Document
+type: task     -> Task
+type: view     -> View
+type: identity -> Identity
 ```
 
 - **Document** — information, composition, and durable discussion surface.
 - **Task** — explicit actionable semantics.
 - **View** — pure selection plus optional presentation hints.
-- **Group** — named actor membership for addressing and future authorization/admin roles.
+- **Identity** — an addressable individual or group used for mentions, assignment, and authorization.
 
-Comments, Messages, Chats, Humans, and Agents are deliberately not additional file types. Inline unresolved comments live in the Markdown they discuss. Canonical actor/mention namespaces are `human:name`, `agent:name`, and `group:name`; `@mention` means attention while `assignee:` means responsibility.
+Document, Task, and View are the three work-content primitives. Identity is the single actor primitive. Comments, Messages, Chats, Humans, Agents, and Groups are deliberately not additional file types. Inline comments live in the Markdown they discuss. Identities are addressed directly, such as `@alice` or `@maintainers`; `@mention` means attention while `assignee:` means responsibility.
 
 ## Work model
 
