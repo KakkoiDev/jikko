@@ -35,12 +35,12 @@ A task is explicit:
 type: task
 status: todo
 due: 2026-09-20
-assignee: agent:codex
+assignee: codex
 ---
 
 # Implement session persistence
 
-@agent:codex follow [[session-design]].
+@codex follow [[session-design]].
 ```
 
 An identity may represent an individual or a group:
@@ -77,7 +77,7 @@ go run ./cmd/jikko check --dir /path/to/workspace
 
 `--json` is intended for agents/scripts. Markdown remains source of truth regardless of whether a human, browser, or agent edits it.
 
-> **Current limitation:** the implementation can inspect and serve a workspace, but the source-first browser editor, comments/mentions/groups implementation, Git history/merge integration, uploads, media embeds, Mermaid, semantic rename, and mutation commands are roadmap work.
+> **Current limitation:** the implementation can inspect and serve a workspace, but the source-first browser editor, comments/mentions/identity collaboration, Git history/merge integration, uploads, media embeds, Mermaid, semantic rename, and mutation commands are roadmap work.
 
 ## Core model
 
