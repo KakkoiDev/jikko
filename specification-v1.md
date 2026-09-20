@@ -55,10 +55,10 @@ The harness MUST expose semantic operations and validation that preserve this mo
 Every Jikko source object is a Markdown file with optional YAML frontmatter and a Markdown body.
 
 ```text
-no type       -> Document
-type: task    -> Task
-type: view    -> View
-type: group   -> Group
+no type        -> Document
+type: task     -> Task
+type: view     -> View
+type: identity -> Identity
 ```
 
 ### 3.1 Document
@@ -110,28 +110,28 @@ view:
 
 A View MUST NOT use its body for arbitrary narrative content or stored query results. Narrative composition belongs in a Document.
 
-### 3.4 Group
+### 3.4 Identity
 
-A Group is explicitly declared with `type: group`.
+An Identity is explicitly declared with `type: identity`. Identity is the single actor primitive and is normative in [identity-permissions.md](identity-permissions.md).
+
+An Identity without `members` represents an individual. An Identity with `members` represents a group of identities:
 
 ```md
 ---
-type: group
+type: identity
 members:
-  - human:alice
-  - agent:codex
+  - alice
+  - codex
 ---
 
 # Maintainers
 ```
 
-Groups are a core primitive because membership is expected to participate in mentions, assignment, identity organization, and authorization/admin roles.
+There are no separate Human, Agent, Group, Team, Person, or Role primitives. Membership is transitive, reverse membership is derived, and cycles or dangling members MUST be reported by the harness.
 
-Canonical actor identities use namespaces such as `human:name` and `agent:name`. Group references use `group:name`.
+Identities are addressed directly, such as `@alice`, `@codex`, or `@maintainers`. Identity is not authentication; the harness authenticates a caller and maps it to one individual Identity.
 
-A group MAY later carry authorization policy, but the exact permissions schema is an open design question. A group that participates in authorization MUST NOT be self-escalatable through an operation the requesting actor is not already authorized to perform.
-
-Jikko authorization applies to actions through the harness. Direct filesystem/Git access remains governed by the operating system and repository access; Jikko MUST NOT pretend to sandbox an actor that already has unrestricted filesystem write access.
+Authorization semantics are defined in [identity-permissions.md](identity-permissions.md). A mutation MUST NOT allow an actor to escalate its own effective authorization.
 
 ## 4. Metadata
 
@@ -161,7 +161,7 @@ Examples:
 ![[paper.pdf]]
 ```
 
-A harness chooses presentation from the resolved target. Markdown renders as document/task/view/group content as appropriate; common media render natively; unknown types fall back to a file card/link.
+A harness chooses presentation from the resolved target. Markdown renders as document/task/view/identity content as appropriate; common media render natively; unknown types fall back to a file card/link.
 
 Embedded Markdown remains a reference to the source file, never a copied representation.
 
@@ -390,7 +390,7 @@ The following are deliberately not separate core primitives:
 - CRDT/OT collaboration
 - Git LFS/large-file subsystem
 
-`Group` is intentionally a core primitive because it has earned semantics across addressing, assignment/organization, and authorization.
+`Identity` is the single actor primitive. Individual and group actors are expressed through Identity membership rather than separate Human, Agent, Group, Team, Person, or Role types.
 
 ## 18. Core summary
 
@@ -398,7 +398,7 @@ The following are deliberately not separate core primitives:
 DOCUMENT = information, composition, and durable discussion surface
 TASK     = information with explicit actionable semantics
 VIEW     = pure selection plus presentation hints
-GROUP    = named actor membership for addressing and authorization
+IDENTITY = individual or group actor for addressing, assignment, and authorization
 
 LINK     = authored relationship
 BACKLINK = derived relationship
