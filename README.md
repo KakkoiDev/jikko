@@ -150,7 +150,7 @@ The CLI is Jikko's initial machine interface. Semantic mutations must remain str
 
 The core currently scans Markdown directly into memory. There is deliberately no database or persistent `.data` index yet.
 
-The browser harness stays server-first: HTMX 4 for requests/swaps, hx-live for tiny local behavior, SSE by default for server-to-browser updates, and Basecoat CSS for presentation. HTMAX 4.0.0 and Basecoat 1.0.2 CSS are vendored/embedded, so runtime does not require CDN/npm/network access.
+The browser harness stays server-first: HTMX 4 for requests/swaps, hx-live for tiny local behavior, SSE by default for server-to-browser updates, and Basecoat CSS for presentation. HTMX 4.0.0 and Basecoat 1.0.2 CSS are vendored/embedded, so runtime does not require CDN/npm/network access.
 
 See [architecture-browser.md](architecture-browser.md) for browser architecture, [agent.md](agent.md) for AI-agent orientation, [ux-plan.md](ux-plan.md) for product/collaboration decisions, and [specification-v1.md](specification-v1.md) for source semantics.
 
