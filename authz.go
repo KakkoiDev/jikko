@@ -17,17 +17,24 @@ const (
 var capabilityNames = [...]string{"", "read", "comment", "write", "admin"}
 
 func (c Capability) String() string {
-	if c < 1 || int(c) >= len(capabilityNames) { return fmt.Sprintf("capability(%d)", int(c)) }
+	if c < 1 || int(c) >= len(capabilityNames) {
+		return fmt.Sprintf("capability(%d)", int(c))
+	}
 	return capabilityNames[c]
 }
 
 func ParseCapability(s string) (Capability, bool) {
 	switch strings.ToLower(s) {
-	case "read": return Read, true
-	case "comment": return Comment, true
-	case "write": return Write, true
-	case "admin": return Admin, true
-	default: return 0, false
+	case "read":
+		return Read, true
+	case "comment":
+		return Comment, true
+	case "write":
+		return Write, true
+	case "admin":
+		return Admin, true
+	default:
+		return 0, false
 	}
 }
 
@@ -35,7 +42,9 @@ func ParseCapability(s string) (Capability, bool) {
 // carries none or carries one that cannot be evaluated. Use Page.Restricted to
 // tell "no policy" (open) from "unusable policy" (closed).
 func Permissions(p *Page) map[string]any {
-	if p == nil || !p.Restricted || !p.aclUsable { return nil }
+	if p == nil || !p.Restricted || !p.aclUsable {
+		return nil
+	}
 	m, _ := p.Metadata["permissions"].(map[string]any)
 	return m
 }
@@ -70,7 +79,9 @@ func (w *Workspace) checkIdentities() {
 		state[p.Path] = done
 	}
 	for _, p := range w.sorted() {
-		if p.Kind == Identity { visit(p, nil) }
+		if p.Kind == Identity {
+			visit(p, nil)
+		}
 	}
 }
 
@@ -80,7 +91,9 @@ func (w *Workspace) checkIdentities() {
 func (w *Workspace) checkPermissions() {
 	for _, p := range w.sorted() {
 		perms := Permissions(p)
-		if perms == nil { continue }
+		if perms == nil {
+			continue
+		}
 		for _, name := range sortedKeys(perms) {
 			if _, ok := ParseCapability(name); !ok {
 				w.report(p.Path, ProblemPermissions, "unknown permission %q", name)
@@ -115,7 +128,9 @@ func (w *Workspace) Validate() error { return w.firstProblem("") }
 
 func (w *Workspace) firstProblem(kind string) error {
 	for _, p := range w.Problems {
-		if kind == "" || p.Kind == kind { return p }
+		if kind == "" || p.Kind == kind {
+			return p
+		}
 	}
 	return nil
 }
@@ -123,19 +138,29 @@ func (w *Workspace) firstProblem(kind string) error {
 // MemberOf reports whether individual is directly or transitively a member of group.
 func (w *Workspace) MemberOf(individual, group string) bool {
 	person, ok := w.ResolveIdentity(individual)
-	if !ok { return false }
+	if !ok {
+		return false
+	}
 	g, ok := w.ResolveIdentity(group)
-	if !ok { return false }
+	if !ok {
+		return false
+	}
 	return w.containsIdentity(g, person.Path, map[string]bool{})
 }
 
 func (w *Workspace) containsIdentity(group *Page, target string, seen map[string]bool) bool {
-	if seen[group.Path] { return false }
+	if seen[group.Path] {
+		return false
+	}
 	seen[group.Path] = true
 	for _, ref := range group.Members {
 		m, ok := w.ResolveIdentity(ref)
-		if !ok { continue }
-		if m.Path == target || w.containsIdentity(m, target, seen) { return true }
+		if !ok {
+			continue
+		}
+		if m.Path == target || w.containsIdentity(m, target, seen) {
+			return true
+		}
 	}
 	return false
 }
@@ -146,19 +171,33 @@ func (w *Workspace) containsIdentity(group *Page, target string, seen map[string
 // present but unusable is closed to everyone: an unreadable policy must never
 // be read as the absence of a policy.
 func (w *Workspace) Allowed(actor string, p *Page, want Capability) bool {
-	if p == nil { return false }
-	if !p.Restricted { return true }
-	if !p.aclUsable { return false }
+	if p == nil {
+		return false
+	}
+	if !p.Restricted {
+		return true
+	}
+	if !p.aclUsable {
+		return false
+	}
 	actorPage, ok := w.ResolveIdentity(actor)
-	if !ok || len(actorPage.Members) != 0 { return false }
+	if !ok || len(actorPage.Members) != 0 {
+		return false
+	}
 	for name, raw := range Permissions(p) {
 		grant, ok := ParseCapability(name)
-		if !ok || grant < want { continue }
+		if !ok || grant < want {
+			continue
+		}
 		subjects, _ := stringList(raw)
 		for _, subject := range subjects {
 			target, ok := w.ResolveIdentity(subject)
-			if !ok { continue }
-			if target.Path == actorPage.Path || w.containsIdentity(target, actorPage.Path, map[string]bool{}) { return true }
+			if !ok {
+				continue
+			}
+			if target.Path == actorPage.Path || w.containsIdentity(target, actorPage.Path, map[string]bool{}) {
+				return true
+			}
 		}
 	}
 	return false
@@ -168,7 +207,9 @@ func (w *Workspace) Allowed(actor string, p *Page, want Capability) bool {
 func (w *Workspace) individuals() []*Page {
 	var out []*Page
 	for _, p := range w.sorted() {
-		if p.Kind == Identity && len(p.Members) == 0 { out = append(out, p) }
+		if p.Kind == Identity && len(p.Members) == 0 {
+			out = append(out, p)
+		}
 	}
 	return out
 }
@@ -177,7 +218,9 @@ func (w *Workspace) individuals() []*Page {
 func (w *Workspace) Administrators(p *Page) []string {
 	var out []string
 	for _, a := range w.individuals() {
-		if w.Allowed(strings.TrimSuffix(a.Path, ".md"), p, Admin) { out = append(out, a.Path) }
+		if w.Allowed(strings.TrimSuffix(a.Path, ".md"), p, Admin) {
+			out = append(out, a.Path)
+		}
 	}
 	return out
 }

@@ -14,7 +14,9 @@ import (
 
 func sortedKeys[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
-	for k := range m { out = append(out, k) }
+	for k := range m {
+		out = append(out, k)
+	}
 	sort.Strings(out)
 	return out
 }
@@ -28,12 +30,18 @@ func sortedKeys[V any](m map[string]V) []string {
 // list.
 func (w *Workspace) SetMetadata(actor, ref, key, value string) error {
 	p, ok := w.Resolve(ref)
-	if !ok { return fmt.Errorf("reference %q not found or ambiguous", ref) }
-	if strings.TrimSpace(key) == "" { return errors.New("property name required") }
+	if !ok {
+		return fmt.Errorf("reference %q not found or ambiguous", ref)
+	}
+	if strings.TrimSpace(key) == "" {
+		return errors.New("property name required")
+	}
 	if key == "permissions" {
 		return errors.New("permissions is an access-control policy: use `jikko perm <reference> <capability> [identity...]`")
 	}
-	if !w.Allowed(actor, p, Write) { return fmt.Errorf("%s lacks write permission on %s", actor, p.Path) }
+	if !w.Allowed(actor, p, Write) {
+		return fmt.Errorf("%s lacks write permission on %s", actor, p.Path)
+	}
 	return w.mutate(actor, p, func(m *yaml.Node) error { return setMappingValue(m, key, value) })
 }
 
@@ -42,15 +50,25 @@ func (w *Workspace) SetMetadata(actor, ref, key, value string) error {
 // removes the grant. Changing access-control policy requires admin.
 func (w *Workspace) SetPermission(actor, ref, capability string, subjects ...string) error {
 	p, ok := w.Resolve(ref)
-	if !ok { return fmt.Errorf("reference %q not found or ambiguous", ref) }
+	if !ok {
+		return fmt.Errorf("reference %q not found or ambiguous", ref)
+	}
 	want, ok := ParseCapability(capability)
-	if !ok { return fmt.Errorf("unknown capability %q: expected read, comment, write, or admin", capability) }
-	if !w.Allowed(actor, p, Admin) { return fmt.Errorf("%s lacks admin permission on %s", actor, p.Path) }
+	if !ok {
+		return fmt.Errorf("unknown capability %q: expected read, comment, write, or admin", capability)
+	}
+	if !w.Allowed(actor, p, Admin) {
+		return fmt.Errorf("%s lacks admin permission on %s", actor, p.Path)
+	}
 	clean := make([]string, 0, len(subjects))
 	for _, s := range subjects {
 		s = strings.TrimSuffix(strings.TrimSpace(s), ".md")
-		if s == "" { continue }
-		if _, ok := w.ResolveIdentity(s); !ok { return fmt.Errorf("identity %q not found or ambiguous", s) }
+		if s == "" {
+			continue
+		}
+		if _, ok := w.ResolveIdentity(s); !ok {
+			return fmt.Errorf("identity %q not found or ambiguous", s)
+		}
 		clean = append(clean, s)
 	}
 	return w.mutate(actor, p, func(m *yaml.Node) error { return setPermissionEntry(m, want.String(), clean) })
@@ -60,21 +78,33 @@ func (w *Workspace) SetPermission(actor, ref, capability string, subjects ...str
 // resulting workspace is no worse than the current one. It enforces optimistic
 // concurrency, writes atomically, and rolls back on rejection.
 func (w *Workspace) mutate(actor string, p *Page, edit func(*yaml.Node) error) error {
-	if actorPage, ok := w.ResolveIdentity(actor); ok { actor = strings.TrimSuffix(actorPage.Path, ".md") }
+	if actorPage, ok := w.ResolveIdentity(actor); ok {
+		actor = strings.TrimSuffix(actorPage.Path, ".md")
+	}
 	target, err := w.safePath(p)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	raw, err := os.ReadFile(target)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	if fingerprint(raw) != p.rev {
 		return fmt.Errorf("%s changed on disk after it was read; re-read the workspace and retry", p.Path)
 	}
 	next, err := rewriteFrontmatter(raw, edit)
-	if err != nil { return fmt.Errorf("%s: %w", p.Path, err) }
-	if bytes.Equal(next, raw) { return nil }
+	if err != nil {
+		return fmt.Errorf("%s: %w", p.Path, err)
+	}
+	if bytes.Equal(next, raw) {
+		return nil
+	}
 
 	before := w.snapshot()
 	adminBefore := func(pagePath string) bool { return before.admins[pagePath][actor] }
-	if err := writeAtomic(target, next); err != nil { return err }
+	if err := writeAtomic(target, next); err != nil {
+		return err
+	}
 	proposed, err := Open(w.Root)
 	if err != nil {
 		_ = writeAtomic(target, raw)
@@ -92,15 +122,25 @@ func (w *Workspace) mutate(actor string, p *Page, edit func(*yaml.Node) error) e
 // writes through a symbolic link, so a mutation cannot reach outside the root.
 func (w *Workspace) safePath(p *Page) (string, error) {
 	linkErr := fmt.Errorf("%s is a symbolic link; edit the file it points at instead", p.Path)
-	if p.symlink { return "", linkErr }
+	if p.symlink {
+		return "", linkErr
+	}
 	target := filepath.Join(w.Root, filepath.FromSlash(p.Path))
 	info, err := os.Lstat(target)
-	if err != nil { return "", err }
-	if info.Mode()&os.ModeSymlink != 0 { return "", linkErr }
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", linkErr
+	}
 	real, err := filepath.EvalSymlinks(target)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	root, err := filepath.EvalSymlinks(w.Root)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	rel, err := filepath.Rel(root, real)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return "", fmt.Errorf("%s resolves outside the workspace", p.Path)
@@ -112,15 +152,29 @@ func (w *Workspace) safePath(p *Page) (string, error) {
 // crash or a concurrent reader never observes a half-written page.
 func writeAtomic(target string, data []byte) error {
 	mode := os.FileMode(0644)
-	if info, err := os.Stat(target); err == nil { mode = info.Mode().Perm() }
+	if info, err := os.Stat(target); err == nil {
+		mode = info.Mode().Perm()
+	}
 	f, err := os.CreateTemp(filepath.Dir(target), ".jikko-*.tmp")
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	tmp := f.Name()
 	defer os.Remove(tmp)
-	if _, err := f.Write(data); err != nil { f.Close(); return err }
-	if err := f.Sync(); err != nil { f.Close(); return err }
-	if err := f.Close(); err != nil { return err }
-	if err := os.Chmod(tmp, mode); err != nil { return err }
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, mode); err != nil {
+		return err
+	}
 	return os.Rename(tmp, target)
 }
 
@@ -136,20 +190,28 @@ func rewriteFrontmatter(raw []byte, edit func(*yaml.Node) error) ([]byte, error)
 		body = raw
 	} else if len(bytes.TrimSpace(front)) > 0 {
 		var doc yaml.Node
-		if err := yaml.Unmarshal(front, &doc); err != nil { return nil, fmt.Errorf("invalid YAML frontmatter: %w", err) }
+		if err := yaml.Unmarshal(front, &doc); err != nil {
+			return nil, fmt.Errorf("invalid YAML frontmatter: %w", err)
+		}
 		if m := mappingOf(&doc); m != nil {
 			mapping = m
 		} else {
 			return nil, errors.New("frontmatter is not a YAML mapping")
 		}
 	}
-	if err := edit(mapping); err != nil { return nil, err }
+	if err := edit(mapping); err != nil {
+		return nil, err
+	}
 
 	var encoded bytes.Buffer
 	enc := yaml.NewEncoder(&encoded)
 	enc.SetIndent(2)
-	if err := enc.Encode(mapping); err != nil { return nil, err }
-	if err := enc.Close(); err != nil { return nil, err }
+	if err := enc.Encode(mapping); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
 
 	header := append([]byte("---\n"), encoded.Bytes()...)
 	header = append(header, []byte("---\n")...)
@@ -165,7 +227,9 @@ func usesCRLF(b []byte) bool { return bytes.Contains(b, []byte("\r\n")) }
 // flatten a nested mapping into a scalar and keeping a sequence a sequence.
 func setMappingValue(m *yaml.Node, key, value string) error {
 	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value != key { continue }
+		if m.Content[i].Value != key {
+			continue
+		}
 		switch node := m.Content[i+1]; node.Kind {
 		case yaml.MappingNode:
 			return fmt.Errorf("%q holds a YAML mapping and cannot be replaced by a plain value", key)
@@ -186,10 +250,15 @@ func setMappingValue(m *yaml.Node, key, value string) error {
 func setPermissionEntry(m *yaml.Node, capability string, subjects []string) error {
 	var perms *yaml.Node
 	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == "permissions" { perms = m.Content[i+1]; break }
+		if m.Content[i].Value == "permissions" {
+			perms = m.Content[i+1]
+			break
+		}
 	}
 	if perms == nil {
-		if len(subjects) == 0 { return nil }
+		if len(subjects) == 0 {
+			return nil
+		}
 		perms = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 		m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "permissions"}, perms)
 	}
@@ -198,7 +267,9 @@ func setPermissionEntry(m *yaml.Node, capability string, subjects []string) erro
 		*perms = yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	}
 	for i := 0; i+1 < len(perms.Content); i += 2 {
-		if perms.Content[i].Value != capability { continue }
+		if perms.Content[i].Value != capability {
+			continue
+		}
 		if len(subjects) == 0 {
 			if len(perms.Content) == 2 {
 				return fmt.Errorf("clearing %q would leave an empty policy, which denies everyone; remove the permissions block by hand to reopen the file", capability)
@@ -209,19 +280,25 @@ func setPermissionEntry(m *yaml.Node, capability string, subjects []string) erro
 		}
 		return nil
 	}
-	if len(subjects) == 0 { return nil }
+	if len(subjects) == 0 {
+		return nil
+	}
 	perms.Content = append(perms.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: capability}, subjectNode(subjects))
 	return nil
 }
 
 func subjectNode(subjects []string) *yaml.Node {
-	if len(subjects) == 1 { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: subjects[0]} }
+	if len(subjects) == 1 {
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: subjects[0]}
+	}
 	return &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: scalarNodes(subjects)}
 }
 
 func scalarNodes(values []string) []*yaml.Node {
 	out := make([]*yaml.Node, 0, len(values))
-	for _, v := range values { out = append(out, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v}) }
+	for _, v := range values {
+		out = append(out, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v})
+	}
 	return out
 }
 
@@ -251,13 +328,17 @@ func assignScalar(node *yaml.Node, value string) {
 }
 
 func splitList(value string) []string {
-	if !strings.Contains(value, ",") { 
-		if strings.TrimSpace(value) == "" { return nil }
+	if !strings.Contains(value, ",") {
+		if strings.TrimSpace(value) == "" {
+			return nil
+		}
 		return []string{strings.TrimSpace(value)}
 	}
 	var out []string
 	for _, part := range strings.Split(value, ",") {
-		if part = strings.TrimSpace(part); part != "" { out = append(out, part) }
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
 	}
 	return out
 }
@@ -278,7 +359,9 @@ func (w *Workspace) snapshot() snapshot {
 		grants:     map[string]Capability{},
 		admins:     map[string]map[string]bool{},
 	}
-	for _, p := range w.Problems { s.problems[p.Error()] = true }
+	for _, p := range w.Problems {
+		s.problems[p.Error()] = true
+	}
 	individuals := w.individuals()
 	for _, p := range w.sorted() {
 		s.restricted[p.Path] = p.Restricted
@@ -286,9 +369,13 @@ func (w *Workspace) snapshot() snapshot {
 		for _, a := range individuals {
 			actor := strings.TrimSuffix(a.Path, ".md")
 			for c := Admin; c >= Read; c-- {
-				if !w.Allowed(actor, p, c) { continue }
+				if !w.Allowed(actor, p, c) {
+					continue
+				}
 				s.grants[actor+"\x00"+p.Path] = c
-				if c == Admin { s.admins[p.Path][actor] = true }
+				if c == Admin {
+					s.admins[p.Path][actor] = true
+				}
 				break
 			}
 		}
@@ -306,10 +393,14 @@ func (before snapshot) diff(after snapshot, adminBefore func(pagePath string) bo
 		}
 	}
 	for _, problem := range sortedKeys(after.problems) {
-		if !before.problems[problem] { return fmt.Errorf("it would introduce a workspace problem: %s", problem) }
+		if !before.problems[problem] {
+			return fmt.Errorf("it would introduce a workspace problem: %s", problem)
+		}
 	}
 	for _, key := range sortedKeys(after.grants) {
-		if after.grants[key] <= before.grants[key] { continue }
+		if after.grants[key] <= before.grants[key] {
+			continue
+		}
 		actor, pagePath, _ := strings.Cut(key, "\x00")
 		if !adminBefore(pagePath) {
 			return fmt.Errorf("it would grant %s %s on %s, which you may not administer", actor, after.grants[key], pagePath)
@@ -328,18 +419,29 @@ func (before snapshot) diff(after snapshot, adminBefore func(pagePath string) bo
 // Mutations are additionally judged by their actual effect; see snapshot.diff.
 func (w *Workspace) CanChangeMembers(actor, group string) error {
 	g, ok := w.ResolveIdentity(group)
-	if !ok { return fmt.Errorf("identity %q not found or ambiguous", group) }
-	if len(g.Members) == 0 { return fmt.Errorf("identity %q is not a group", group) }
+	if !ok {
+		return fmt.Errorf("identity %q not found or ambiguous", group)
+	}
+	if len(g.Members) == 0 {
+		return fmt.Errorf("identity %q is not a group", group)
+	}
 	for _, p := range w.sorted() {
 		affected := false
 		for _, raw := range Permissions(p) {
 			subjects, _ := stringList(raw)
 			for _, subject := range subjects {
 				s, ok := w.ResolveIdentity(subject)
-				if !ok { continue }
-				if s.Path == g.Path || w.containsIdentity(s, g.Path, map[string]bool{}) { affected = true; break }
+				if !ok {
+					continue
+				}
+				if s.Path == g.Path || w.containsIdentity(s, g.Path, map[string]bool{}) {
+					affected = true
+					break
+				}
 			}
-			if affected { break }
+			if affected {
+				break
+			}
 		}
 		if affected && !w.Allowed(actor, p, Admin) {
 			return fmt.Errorf("%s cannot change %s membership: admin required on %s", actor, group, p.Path)

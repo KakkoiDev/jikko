@@ -28,11 +28,16 @@ const (
 // ParseKind maps a frontmatter `type` value to a Kind. An absent type is a Document.
 func ParseKind(s string) (Kind, bool) {
 	switch s {
-	case "", "document": return Document, true
-	case "task": return Task, true
-	case "view": return View, true
-	case "identity": return Identity, true
-	default: return "", false
+	case "", "document":
+		return Document, true
+	case "task":
+		return Task, true
+	case "view":
+		return View, true
+	case "identity":
+		return Identity, true
+	default:
+		return "", false
 	}
 }
 
@@ -92,25 +97,39 @@ type Workspace struct {
 // page whose access policy cannot be evaluated is denied to everyone.
 func Open(root string) (*Workspace, error) {
 	root, err := filepath.Abs(root)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	w := &Workspace{Root: root, Pages: map[string]*Page{}}
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		if d.IsDir() {
-			if d.Name() == ".git" || d.Name() == ".data" { return filepath.SkipDir }
+			if d.Name() == ".git" || d.Name() == ".data" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		if d.Name() == ".auth.md" { return nil }
-		if !strings.EqualFold(filepath.Ext(p), ".md") { return nil }
+		if d.Name() == ".auth.md" {
+			return nil
+		}
+		if !strings.EqualFold(filepath.Ext(p), ".md") {
+			return nil
+		}
 		rel, err := filepath.Rel(root, p)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		rel = filepath.ToSlash(rel)
 		page, problems := parseFile(p, rel, d)
 		w.Pages[rel] = page
 		w.Problems = append(w.Problems, problems...)
 		return nil
 	})
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	w.index()
 	w.deriveBacklinks()
 	w.checkIdentities()
@@ -196,10 +215,14 @@ func parseFile(fullPath, rel string, d fs.DirEntry) (*Page, []Problem) {
 // mappingOf returns the mapping node of a decoded YAML document, or nil.
 func mappingOf(n *yaml.Node) *yaml.Node {
 	if n.Kind == yaml.DocumentNode {
-		if len(n.Content) != 1 { return nil }
+		if len(n.Content) != 1 {
+			return nil
+		}
 		n = n.Content[0]
 	}
-	if n.Kind != yaml.MappingNode { return nil }
+	if n.Kind != yaml.MappingNode {
+		return nil
+	}
 	return n
 }
 
@@ -210,17 +233,23 @@ var fence = []byte("---")
 // LF and CRLF files are both accepted and the body is returned byte-exact.
 func splitFrontmatter(src []byte) (front, body []byte, ok bool) {
 	first, rest, found := bytes.Cut(src, []byte("\n"))
-	if !found || !bytes.Equal(bytes.TrimSuffix(first, []byte("\r")), fence) { return nil, src, false }
+	if !found || !bytes.Equal(bytes.TrimSuffix(first, []byte("\r")), fence) {
+		return nil, src, false
+	}
 	for offset := 0; offset < len(rest); {
 		line, advance := nextLine(rest[offset:])
-		if bytes.Equal(bytes.TrimSuffix(line, []byte("\r")), fence) { return rest[:offset], rest[offset+advance:], true }
+		if bytes.Equal(bytes.TrimSuffix(line, []byte("\r")), fence) {
+			return rest[:offset], rest[offset+advance:], true
+		}
 		offset += advance
 	}
 	return nil, src, false
 }
 
 func nextLine(b []byte) (line []byte, advance int) {
-	if i := bytes.IndexByte(b, '\n'); i >= 0 { return b[:i], i + 1 }
+	if i := bytes.IndexByte(b, '\n'); i >= 0 {
+		return b[:i], i + 1
+	}
 	return b, len(b)
 }
 
@@ -234,14 +263,20 @@ func stringList(v any) ([]string, bool) {
 	case nil:
 		return nil, true
 	case string:
-		if strings.TrimSpace(x) == "" { return nil, true }
+		if strings.TrimSpace(x) == "" {
+			return nil, true
+		}
 		return []string{x}, true
 	case []any:
 		out := make([]string, 0, len(x))
 		for _, item := range x {
 			s, ok := item.(string)
-			if !ok { return out, false }
-			if strings.TrimSpace(s) != "" { out = append(out, s) }
+			if !ok {
+				return out, false
+			}
+			if strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
 		}
 		return out, true
 	case []string:
@@ -252,9 +287,9 @@ func stringList(v any) ([]string, bool) {
 }
 
 var (
-	refPattern       = regexp.MustCompile(`(!?)\[\[([^\]]+)\]\]`)
+	refPattern        = regexp.MustCompile(`(!?)\[\[([^\]]+)\]\]`)
 	inlineCodePattern = regexp.MustCompile("`+[^`]*`+")
-	fencePattern     = regexp.MustCompile("^ {0,3}(```+|~~~+)")
+	fencePattern      = regexp.MustCompile("^ {0,3}(```+|~~~+)")
 )
 
 // scanProse calls visit for each body line that is ordinary prose, skipping
@@ -265,10 +300,15 @@ func scanProse(body string, visit func(line string)) {
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSuffix(line, "\r")
 		if open != "" {
-			if strings.HasPrefix(strings.TrimSpace(line), open) { open = "" }
+			if strings.HasPrefix(strings.TrimSpace(line), open) {
+				open = ""
+			}
 			continue
 		}
-		if m := fencePattern.FindStringSubmatch(line); m != nil { open = m[1]; continue }
+		if m := fencePattern.FindStringSubmatch(line); m != nil {
+			open = m[1]
+			continue
+		}
 		visit(inlineCodePattern.ReplaceAllString(line, ""))
 	}
 }
@@ -277,8 +317,14 @@ func refsIn(body string) (links, embeds []string) {
 	scanProse(body, func(line string) {
 		for _, m := range refPattern.FindAllStringSubmatch(line, -1) {
 			ref := strings.TrimSpace(strings.SplitN(m[2], "|", 2)[0])
-			if ref == "" { continue }
-			if m[1] == "!" { embeds = append(embeds, ref) } else { links = append(links, ref) }
+			if ref == "" {
+				continue
+			}
+			if m[1] == "!" {
+				embeds = append(embeds, ref)
+			} else {
+				links = append(links, ref)
+			}
 		}
 	})
 	return links, embeds
@@ -287,9 +333,13 @@ func refsIn(body string) (links, embeds []string) {
 func titleOf(body, pagePath string) string {
 	title := ""
 	scanProse(body, func(line string) {
-		if title == "" && strings.HasPrefix(line, "# ") { title = strings.TrimSpace(strings.TrimPrefix(line, "# ")) }
+		if title == "" && strings.HasPrefix(line, "# ") {
+			title = strings.TrimSpace(strings.TrimPrefix(line, "# "))
+		}
 	})
-	if title != "" { return title }
+	if title != "" {
+		return title
+	}
 	return stemOf(pagePath)
 }
 
@@ -306,14 +356,20 @@ func (w *Workspace) index() {
 	for pagePath, p := range w.Pages {
 		stem := strings.TrimSuffix(pagePath, ".md")
 		w.byStem[stem] = append(w.byStem[stem], p)
-		if base := path.Base(stem); base != stem { w.byStem[base] = append(w.byStem[base], p) }
+		if base := path.Base(stem); base != stem {
+			w.byStem[base] = append(w.byStem[base], p)
+		}
 	}
 }
 
 func (w *Workspace) Resolve(ref string) (*Page, bool) {
 	ref = strings.TrimSuffix(strings.TrimSpace(filepath.ToSlash(ref)), ".md")
-	if ref == "" { return nil, false }
-	if matches := w.byStem[ref]; len(matches) == 1 { return matches[0], true }
+	if ref == "" {
+		return nil, false
+	}
+	if matches := w.byStem[ref]; len(matches) == 1 {
+		return matches[0], true
+	}
 	return nil, false
 }
 
@@ -325,7 +381,9 @@ func (w *Workspace) ResolveIdentity(ref string) (*Page, bool) {
 func (w *Workspace) deriveBacklinks() {
 	for _, source := range w.sorted() {
 		for _, ref := range append(append([]string{}, source.Links...), source.Embeds...) {
-			if target, ok := w.Resolve(ref); ok { target.Backlinks = append(target.Backlinks, source.Path) }
+			if target, ok := w.Resolve(ref); ok {
+				target.Backlinks = append(target.Backlinks, source.Path)
+			}
 		}
 	}
 	for _, p := range w.Pages {
@@ -337,7 +395,9 @@ func (w *Workspace) deriveBacklinks() {
 func dedupe(in []string) []string {
 	out := in[:0]
 	for i, s := range in {
-		if i == 0 || in[i-1] != s { out = append(out, s) }
+		if i == 0 || in[i-1] != s {
+			out = append(out, s)
+		}
 	}
 	return out
 }
@@ -345,7 +405,9 @@ func dedupe(in []string) []string {
 // sorted returns pages in deterministic path order.
 func (w *Workspace) sorted() []*Page {
 	out := make([]*Page, 0, len(w.Pages))
-	for _, p := range w.Pages { out = append(out, p) }
+	for _, p := range w.Pages {
+		out = append(out, p)
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
 }
@@ -353,8 +415,12 @@ func (w *Workspace) sorted() []*Page {
 func (w *Workspace) List(kind Kind, status string) []*Page {
 	out := []*Page{}
 	for _, p := range w.sorted() {
-		if kind != "" && p.Kind != kind { continue }
-		if status != "" && !matchesStatus(p.Metadata["status"], status) { continue }
+		if kind != "" && p.Kind != kind {
+			continue
+		}
+		if status != "" && !matchesStatus(p.Metadata["status"], status) {
+			continue
+		}
 		out = append(out, p)
 	}
 	return out
@@ -363,7 +429,11 @@ func (w *Workspace) List(kind Kind, status string) []*Page {
 // matchesStatus compares against the rendered scalar so a value YAML typed as
 // a number, bool, or date is still selectable from the command line.
 func matchesStatus(value any, want string) bool {
-	if value == nil { return false }
-	if s, ok := value.(string); ok { return s == want }
+	if value == nil {
+		return false
+	}
+	if s, ok := value.(string); ok {
+		return s == want
+	}
 	return fmt.Sprint(value) == want
 }
