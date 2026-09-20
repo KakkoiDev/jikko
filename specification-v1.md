@@ -78,7 +78,7 @@ status: doing
 start: 2026-09-15
 due: 2026-09-20
 tags: [architecture]
-assignee: agent:codex
+assignee: codex
 ---
 
 # Implement session persistence
@@ -139,7 +139,7 @@ Jikko uses YAML frontmatter for structured metadata. Unknown properties are allo
 
 Tags are ordinary metadata. The core imposes no tag hierarchy, inheritance, or namespace semantics.
 
-Do not store information twice when it can be reliably derived. For example, `@agent:codex` in authored Markdown is sufficient for the harness to derive a mention index; a duplicate `mentions:` property is not required.
+Do not store information twice when it can be reliably derived. For example, `@codex` in authored Markdown is sufficient for the harness to derive a mention index; a duplicate `mentions:` property is not required.
 
 ## 5. References and embeds
 
@@ -207,9 +207,9 @@ The harness should <!--comment:c17-->automatically update references<!--/comment
 when a file is renamed.
 
 <!--comment-thread:c17
-@human:alice: Should normal links update too?
+@alice: Should normal links update too?
 
-@agent:codex: Yes, links and embeds.
+@codex: Yes, links and embeds.
 -->
 ```
 
@@ -233,9 +233,9 @@ Current Markdown therefore contains current unresolved discussion; Git contains 
 Canonical mention syntax is source-native:
 
 ```md
-@human:alice
-@agent:codex
-@group:maintainers
+@alice
+@codex
+@maintainers
 ```
 
 Namespaces keep human, agent, and group identities unambiguous. A UI MAY render friendlier labels while preserving canonical source.
