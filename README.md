@@ -19,6 +19,9 @@ go run ./cmd/jikko serve --dir /path/to/workspace
 ```
 
 Open the address printed by `serve` (currently `http://127.0.0.1:8080` by default).
+It binds to localhost and has no transport security of its own; put it behind a
+TLS-terminating reverse proxy and pass `--behind-proxy` to reach it from
+elsewhere.
 
 A normal document needs no type:
 
@@ -77,7 +80,30 @@ go run ./cmd/jikko check --dir /path/to/workspace
 
 `--json` is intended for agents/scripts. Markdown remains source of truth regardless of whether a human, browser, or agent edits it.
 
-> **Current limitation:** the implementation can inspect and serve a workspace, but the source-first browser editor, comments/mentions/identity collaboration, Git history/merge integration, uploads, media embeds, Mermaid, semantic rename, and mutation commands are roadmap work.
+Authenticated callers can make structured edits. A metadata mutation rewrites
+only the property it names, leaving key order, comments, YAML types, and the
+Markdown body untouched:
+
+```sh
+export JIKKO_TOKEN="$(go run ./cmd/jikko auth create alice --dir /path/to/workspace)"
+go run ./cmd/jikko set session-design status doing --dir /path/to/workspace
+go run ./cmd/jikko perm session-design read alice maintainers --dir /path/to/workspace
+```
+
+`set` refuses to touch `permissions`, because access-control policy is a
+mapping rather than a value; `perm` edits it. Both are judged by their effect:
+a change is rejected if it introduces a workspace problem, widens anyone's
+access beyond what you may administer, or leaves a restricted file with no
+administrator.
+
+`check` reports unresolved references together with workspace problems —
+malformed frontmatter, unknown types, views carrying a body, membership cycles,
+and access policies naming identities that do not resolve. A problem is
+reported rather than fatal, so one bad file never makes the rest of a workspace
+unreadable, but a file whose access policy cannot be evaluated is denied to
+everyone until it is fixed.
+
+> **Current limitation:** the implementation can inspect, mutate, and serve a workspace, but the source-first browser editor, comments/mentions/identity collaboration, Git history/merge integration, uploads, media embeds, Mermaid, and semantic rename are roadmap work.
 
 ## Core model
 

@@ -17,17 +17,17 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Test
-        run: go test -vet=off ./...
-      - name: Report vet debt
-        if: always()
-        continue-on-error: true
-        run: go vet ./...
-      - name: Report formatting drift
-        if: always()
+      - name: Build
+        run: go build ./...
+      - name: Format
         run: |
           files="$(gofmt -l .)"
           if [ -n "$files" ]; then
-            echo "::warning::gofmt drift exists in:"
+            echo "::error::gofmt drift in:"
             echo "$files"
+            exit 1
           fi
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -race ./...

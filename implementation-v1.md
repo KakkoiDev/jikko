@@ -13,9 +13,22 @@ Implemented in the Go core:
 - local `.auth.md` bearer-token hashes;
 - cryptographically random token generation and revocation;
 - individual-only authentication;
-- conservative protection for authorization-bearing group membership changes.
+- conservative protection for authorization-bearing group membership changes;
+- fail-closed handling of an access policy that is present but cannot be evaluated;
+- effect-based authorization for mutations;
+- optimistic concurrency, atomic writes, and symlink containment for mutations;
+- surgical frontmatter edits that preserve key order, comments, and YAML types.
 
-The current mutation guard is intentionally conservative: changing a group that participates in ACLs requires effective `admin` on every affected file. It can be relaxed later only if a demonstrated workflow requires finer-grained administration.
+`CanChangeMembers` remains the conservative pre-check it always was: changing a group that participates in ACLs requires effective `admin` on every affected file.
+
+Mutations are no longer gated on that rule alone, because the specification asks for something more precise. Every mutation is evaluated by comparing the effective authorization of the workspace before and after the proposed change, and is rejected if it:
+
+- introduces a workspace problem that did not exist before;
+- raises any identity's effective capability on a file the caller may not administer;
+- removes a restricted file's access policy without admin on that file;
+- leaves a restricted file with no identity able to administer it.
+
+This is simultaneously stricter and less restrictive than the original guard. Stricter, because it catches authorization changes that do not touch `members` at all — demoting an ACL-bearing Identity with `type`, for instance, used to pass as an ordinary write and silently stripped every grant naming it. Less restrictive, because removing a member widens nobody's access and no longer requires admin on every affected file.
 
 
 ## Work-model enforcement direction

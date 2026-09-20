@@ -129,6 +129,10 @@ The Go core owns parsing, indexing, reference resolution, backlinks, identity me
 
 Prefer semantic operations and deterministic `--json`. Direct Markdown edits remain valid for complex content, followed by `jikko check`.
 
+`jikko set` changes one ordinary property and will not touch `permissions`; use `jikko perm` for access-control policy. Both refuse a change that would introduce a workspace problem, widen access beyond what you may administer, or leave a restricted file with no administrator, and both refuse to overwrite a file that changed after you read it. Re-read the workspace and retry rather than forcing the write.
+
+`jikko check` distinguishes unresolved references from workspace problems. Treat a problem as work to do: a file whose access policy cannot be evaluated is denied to everyone until it is fixed.
+
 A mutation should carry authenticated actor context. Do not automatically write `updated_by` into documents. Audit attribution belongs in Git/history unless identity is part of authored meaning.
 
 Rename through Jikko should update safely resolvable `[[links]]` and `![[embeds]]`. Uploads are ordinary workspace files and should use the same core operation from browser and CLI. Respect the configured maximum upload size.
