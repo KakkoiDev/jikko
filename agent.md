@@ -19,6 +19,22 @@ Document = information, composition, and durable discussion surface. Task = expl
 
 Never create a second source of truth.
 
+## Jikko is the go-to workspace
+
+Before acting, read the relevant Jikko Documents, Tasks, comments, and Views. Conduct project discussion in Jikko comments or Documents. Record material goals, questions, decisions, progress, blockers, and evidence there as the work proceeds—not only in an external chat or a final summary.
+
+External conversations are not authoritative project state until their material outcome is incorporated into Jikko. Another human or agent must be able to continue from Jikko without access to a private context window.
+
+Use the existing model rather than inventing file types:
+
+- define work in Documents and Tasks;
+- discuss it through Documents and comments;
+- track it through Task metadata and Views;
+- prove it with links, embeds, tests, commits, measurements, files, or approval;
+- audit it through attributed semantic mutations and Git history.
+
+Claim, checkpoint, evidence, decision, and event are useful concepts, but they are not additional primitives. Express them through Task metadata/content, comments, references, and history, and use runtime semantic operations so enforcement is consistent.
+
 ## Identity
 
 There are no separate Human, Agent, Group, Team, Person, or Role primitives.
