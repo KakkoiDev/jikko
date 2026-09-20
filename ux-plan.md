@@ -47,9 +47,9 @@ The harness should <!--comment:c17-->automatically update references<!--/comment
 when a file is renamed.
 
 <!--comment-thread:c17
-@human:alice: Should normal links update too?
+@alice: Should normal links update too?
 
-@agent:codex: Yes, links and embeds.
+@codex: Yes, links and embeds.
 -->
 ```
 
@@ -74,9 +74,9 @@ A Task marked done while unresolved comments remain should warn initially rather
 Canonical source mentions:
 
 ```md
-@human:alice
-@agent:codex
-@group:maintainers
+@alice
+@codex
+@maintainers
 ```
 
 `@mention` means attention. `assignee:` means responsibility.
