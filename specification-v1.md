@@ -32,6 +32,23 @@ Jikko separates portable authored data from runtime capabilities.
 8. Keep derived runtime data disposable and reproducible.
 9. Git provides audit/history and text merge for the reference harness; Git does not replace Jikko semantics.
 10. Do not add a primitive until substantially different workflows demonstrate that it is necessary.
+11. Jikko is the authoritative workspace for both humans and agents; relevant work and discussion MUST be recorded in Jikko to become durable project knowledge.
+
+## 2.1 Work model and runtime contract
+
+Jikko work is:
+
+- **Definable:** goals, requirements, acceptance criteria, constraints, and responsibilities can be represented in Documents and Tasks.
+- **Discussable:** Documents and Tasks carry durable discussion through comments. Discussion inside Jikko is project knowledge.
+- **Trackable:** Task state, responsibility, dependencies, blockers, and progress can be queried and projected through Views.
+- **Provable:** claims of completion can cite commits, tests, files, measurements, screenshots, external references, or explicit review approval.
+- **Auditable:** authored changes, semantic operations, actor attribution, and historical discussion can be reconstructed from Jikko source plus the reference harness history.
+
+Jikko is the go-to workspace, not an export target for a separate conversation system. Humans and agents MUST read relevant Jikko context before acting and MUST record material goals, questions, decisions, progress, blockers, and evidence in Jikko. An external conversation is not authoritative project state until its material outcome is recorded in a Jikko Document, Task, or comment.
+
+This model does not introduce Claim, Checkpoint, Evidence, Decision, Event, Message, or Chat file types. These are semantics expressed through Task metadata, Document/Task content, comments, links, embeds, and harness history.
+
+The harness MUST expose semantic operations and validation that preserve this model. It MUST keep comments attached to their context, preserve actor attribution, make task state and responsibility queryable, validate resolvable proof references where possible, and surface unmet configured completion requirements. Enforcement MAY be a warning when hard rejection would make ordinary Markdown unusable, but it MUST be deterministic and available to both browser and machine interfaces.
 
 ## 3. Fundamental file semantics
 
@@ -355,6 +372,11 @@ The following are deliberately not separate core primitives:
 - Agent
 - Message
 - Chat
+- Claim
+- Checkpoint
+- Evidence
+- Decision
+- Event
 - Comment
 - Department
 - Workspace hierarchy
@@ -381,7 +403,7 @@ GROUP    = named actor membership for addressing and authorization
 LINK     = authored relationship
 BACKLINK = derived relationship
 EMBED    = composition
-COMMENT  = authored unresolved review state inside Markdown
+COMMENT  = authored durable discussion/review state inside Markdown
 MENTION  = authored request for attention
 ASSIGNEE = authored responsibility
 GIT      = reference harness history/audit/merge substrate
