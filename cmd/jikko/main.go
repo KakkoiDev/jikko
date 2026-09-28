@@ -166,8 +166,8 @@ func show(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(args) != 1 {
-		return errors.New("usage: jikko show [flags] <reference>")
+	if len(args) < 1 {
+		return errors.New("usage: jikko show [flags] <reference> [reference...]")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
