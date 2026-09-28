@@ -47,6 +47,13 @@ export class OfflineBackend {
   branch(ref) { return this.git.branch(ref); }
   checkout(ref) { return this.git.checkout(ref); }
   merge(ref) { return this.git.merge(ref); }
+  currentBranch() { return this.git.currentBranch(); }
+  remoteBranches(remote) { return this.git.remoteBranches(remote); }
+  addRemote(options) { return this.git.addRemote(options); }
+  fetch(options) { return this.git.fetch(options); }
+  pull(options) { return this.git.pull(options); }
+  push(options) { return this.git.push(options); }
+  syncCurrentBranch(options) { return this.git.syncCurrentBranch(options); }
 }
 
 async function readWorkspace(fs, root) {

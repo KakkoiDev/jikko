@@ -42,9 +42,13 @@ The same browser filesystem contains ordinary workspace files and `.git/`. isomo
 
 ZIP export is an independent first-class backup/portability path and excludes `.git/`, `.data/` and `.auth.md`.
 
-## Future synchronization
+## Synchronization boundary
 
-Browser and native workspaces both use Git-compatible history, so future synchronization can build on Git fetch/push or an explicit Jikko sync service rather than inventing a second history model. Remote browser Git is not enabled by default because CORS and credential handling must be designed explicitly.
+Browser and native workspaces use Git-compatible history. The browser Git adapter exposes provider-neutral remote configuration, remote-branch discovery, branch-scoped fetch/pull/push, and current-branch sync.
+
+Jikko deliberately does **not** assign application meaning to branches. It does not know about games, universes, save slots, experiments, or timelines. Applications own branch naming and selective-sync policy.
+
+Authentication is injected by the host application and must never be persisted into Jikko source files. Provider-specific OAuth/device-flow behavior and CORS/proxy policy stay outside the Jikko core.
 
 ## HTMX boundary
 

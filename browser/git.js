@@ -1,4 +1,5 @@
 import git from "isomorphic-git";
+import http from "isomorphic-git/http/web";
 import { VFSFileSystem } from "@componentor/fs";
 
 export class BrowserGit {
@@ -69,6 +70,10 @@ export class BrowserGit {
     return git.listBranches({fs: this.fs, dir: this.dir});
   }
 
+  async remoteBranches(remote = "origin") {
+    return git.listBranches({fs: this.fs, dir: this.dir, remote});
+  }
+
   async branch(ref) {
     return git.branch({fs: this.fs, dir: this.dir, ref});
   }
@@ -77,11 +82,59 @@ export class BrowserGit {
     return git.checkout({fs: this.fs, dir: this.dir, ref});
   }
 
+  async currentBranch() {
+    return git.currentBranch({fs: this.fs, dir: this.dir});
+  }
+
   async merge(theirs, author = {name: "Jikko Browser", email: "browser@jikko.local"}) {
-    return git.merge({fs: this.fs, dir: this.dir, ours: await git.currentBranch({fs: this.fs, dir: this.dir}), theirs, author});
+    return git.merge({fs: this.fs, dir: this.dir, ours: await this.currentBranch(), theirs, author});
+  }
+
+  async addRemote({remote = "origin", url, force = false}) {
+    return git.addRemote({fs: this.fs, dir: this.dir, remote, url, force});
+  }
+
+  async fetch({remote = "origin", ref, depth, singleBranch = true, auth}) {
+    return git.fetch({
+      fs: this.fs, http, dir: this.dir, remote, ref, depth, singleBranch,
+      onAuth: authCallback(auth)
+    });
+  }
+
+  async pull({remote = "origin", ref, author, auth}) {
+    const branch = ref || await this.currentBranch();
+    if (!branch) throw new Error("cannot pull without a checked-out branch");
+    return git.pull({
+      fs: this.fs, http, dir: this.dir, remote, ref: branch,
+      author: author || {name: "Jikko Browser", email: "browser@jikko.local"},
+      singleBranch: true, onAuth: authCallback(auth)
+    });
+  }
+
+  async push({remote = "origin", ref, remoteRef, force = false, auth}) {
+    const branch = ref || await this.currentBranch();
+    if (!branch) throw new Error("cannot push without a checked-out branch");
+    return git.push({
+      fs: this.fs, http, dir: this.dir, remote, ref: branch,
+      remoteRef: remoteRef || branch, force, onAuth: authCallback(auth)
+    });
+  }
+
+  async syncCurrentBranch({remote = "origin", auth, author}) {
+    const ref = await this.currentBranch();
+    if (!ref) throw new Error("cannot sync without a checked-out branch");
+    await this.fetch({remote, ref, singleBranch: true, auth});
+    await this.pull({remote, ref, author, auth});
+    return this.push({remote, ref, auth});
   }
 
   async diffStatus() {
     return this.statusMatrix();
   }
+}
+
+function authCallback(auth) {
+  if (!auth) return undefined;
+  if (typeof auth === "function") return auth;
+  return () => auth;
 }
