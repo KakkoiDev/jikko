@@ -21,7 +21,7 @@ func main() {
 	}
 	commands := map[string]func([]string) error{
 		"list": list, "show": show, "auth": auth, "set": set,
-		"perm": perm, "serve": serve, "check": check,
+		"perm": perm, "serve": serve, "check": check,\n\t\t"tree": tree, "mentions": mentions, "create": create,
 	}
 	run, ok := commands[os.Args[1]]
 	if !ok {
@@ -172,16 +172,20 @@ func show(args []string) error {
 	if err != nil {
 		return err
 	}
-	p, ok := w.Resolve(args[0])
-	// One answer for absent, ambiguous, and forbidden: a denial must not
-	// disclose that a restricted page exists.
-	if !ok || !w.Allowed(actor, p, jikko.Read) {
-		return errors.New("reference not found, ambiguous, or not permitted")
+	pages, err := w.ReadMany(actor, args...)
+	if err != nil {
+		return err
 	}
 	if *asJSON {
-		return json.NewEncoder(os.Stdout).Encode(p)
+		if len(pages) == 1 {
+			return json.NewEncoder(os.Stdout).Encode(pages[0])
+		}
+		return json.NewEncoder(os.Stdout).Encode(pages)
 	}
-	fmt.Printf("%s\n\n%s", p.Title, strings.TrimLeft(p.Body, "\n"))
+	for i, p := range pages {
+		if i > 0 { fmt.Println("\n---") }
+		fmt.Printf("%s\n\n%s", p.Title, strings.TrimLeft(p.Body, "\n"))
+	}
 	return nil
 }
 
@@ -300,4 +304,49 @@ func check(args []string) error {
 		fmt.Printf("ok: %d pages\n", len(w.Pages))
 	}
 	return nil
+}
+
+
+func tree(args []string) error {
+	var asJSON *bool
+	args, dir, token, err := flags("tree", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
+	if err != nil { return err }
+	if len(args) != 0 { return errors.New("usage: jikko tree [flags]") }
+	w, err := openWorkspace(*dir); if err != nil { return err }
+	actor, err := actorFor(w, *token); if err != nil { return err }
+	entries := w.Tree(actor)
+	if *asJSON { return json.NewEncoder(os.Stdout).Encode(entries) }
+	for _, e := range entries { fmt.Printf("%-9s %s\n", e.Type, e.Path) }
+	return nil
+}
+
+func mentions(args []string) error {
+	var asJSON *bool
+	args, dir, token, err := flags("mentions", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
+	if err != nil { return err }
+	if len(args) != 0 { return errors.New("usage: jikko mentions [flags]") }
+	w, err := openWorkspace(*dir); if err != nil { return err }
+	actor, err := actorFor(w, *token); if err != nil { return err }
+	if actor == "" { return errors.New("authentication required: pass --token or set JIKKO_TOKEN") }
+	pages := w.Mentions(actor)
+	if *asJSON { return json.NewEncoder(os.Stdout).Encode(pages) }
+	for _, p := range pages { fmt.Printf("%s\n", p.Path) }
+	return nil
+}
+
+func create(args []string) error {
+	var body, typ *string
+	args, dir, token, err := flags("create", args, func(f *flag.FlagSet) {
+		body = f.String("body", "", "Markdown body")
+		typ = f.String("type", "document", "document or task")
+	})
+	if err != nil { return err }
+	if len(args) != 1 { return errors.New("usage: jikko create [flags] <path> --body <markdown> [--type document|task]") }
+	if *typ != "document" && *typ != "task" { return errors.New("--type must be document or task") }
+	w, err := openWorkspace(*dir); if err != nil { return err }
+	actor, err := actorFor(w, *token); if err != nil { return err }
+	if actor == "" { return errors.New("authentication required: pass --token or set JIKKO_TOKEN") }
+	content := *body
+	if *typ == "task" { content = "---\ntype: task\nstatus: todo\n---\n" + content }
+	return w.CreatePage(actor, args[0], content)
 }
