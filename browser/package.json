@@ -3,7 +3,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@componentor/fs": "^1.0.0",
-    "isomorphic-git": "^1.37.4"
+    "@componentor/fs": "4.3.1",
+    "isomorphic-git": "1.42.3"
+  },
+  "scripts": {
+    "check": "node --check git.js && node --check offline.js && node --check offline-htmx.js"
   }
 }
