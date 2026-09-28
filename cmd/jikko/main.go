@@ -21,7 +21,7 @@ func main() {
 	}
 	commands := map[string]func([]string) error{
 		"list": list, "show": show, "auth": auth, "set": set,
-		"perm": perm, "serve": serve, "check": check,\n\t\t"tree": tree, "mentions": mentions, "create": create,
+		"perm": perm, "serve": serve, "check": check,\n\t\t"tree": tree, "mentions": mentions, "create": create, "commit": commit,
 	}
 	run, ok := commands[os.Args[1]]
 	if !ok {
@@ -349,4 +349,18 @@ func create(args []string) error {
 	content := *body
 	if *typ == "task" { content = "---\ntype: task\nstatus: todo\n---\n" + content }
 	return w.CreatePage(actor, args[0], content)
+}
+
+
+func commit(args []string) error {
+	var operation *string
+	args, dir, token, err := flags("commit", args, func(f *flag.FlagSet) {
+		operation = f.String("operation", "workspace-mutation", "audit operation name")
+	})
+	if err != nil { return err }
+	if len(args) < 1 { return errors.New("usage: jikko commit [flags] <message>") }
+	w, err := openWorkspace(*dir); if err != nil { return err }
+	actor, err := actorFor(w, *token); if err != nil { return err }
+	if actor == "" { return errors.New("authentication required: pass --token or set JIKKO_TOKEN") }
+	return w.Commit(actor, strings.Join(args, " "), *operation)
 }
