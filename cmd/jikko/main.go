@@ -313,7 +313,6 @@ func check(args []string) error {
 	return nil
 }
 
-
 func tree(args []string) error {
 	var asJSON *bool
 	args, dir, token, err := flags("tree", args, func(f *flag.FlagSet) {
