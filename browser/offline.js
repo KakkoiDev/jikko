@@ -24,6 +24,13 @@ export class OfflineBackend {
   read(ref) { return this.readMany([ref])[0]; }
   mentions() { return decode(JikkoWASM.mentions(this.handle, this.actor)); }
 
+  async pages({type = "", status = ""} = {}) {
+    const entries = this.tree().filter(entry => !type || entry.type === type);
+    const refs = entries.map(entry => entry.path.replace(/\\.md$/, ""));
+    if (!refs.length) return [];
+    return this.readMany(refs).filter(page => !status || String(page.metadata?.status ?? "") === status);
+  }
+
   exportZIP() {
     const result = JikkoWASM.exportZIP(this.handle);
     if (!result.ok) throw new Error(result.error);
