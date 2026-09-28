@@ -22,7 +22,7 @@ func main() {
 	commands := map[string]func([]string) error{
 		"list": list, "show": show, "auth": auth, "set": set,
 		"perm": perm, "serve": serve, "check": check,
-		"tree": tree, "mentions": mentions, "create": create, "commit": commit,
+		"tree": tree, "mentions": mentions, "create": create, "commit": commit, "export": exportWorkspace,
 	}
 	run, ok := commands[os.Args[1]]
 	if !ok {
@@ -45,7 +45,7 @@ func usage() {
   tree    list the permission-filtered workspace tree
   mentions list pages addressing the authenticated identity
   create  create a Markdown document or task
-  commit  record changes with actor-attributed Git audit trailers
+  commit  record changes with actor-attributed Git audit trailers\n  export  export a portable workspace ZIP
   set     set a metadata property
   perm    grant or clear a capability on a page
   auth    create or revoke a credential
@@ -430,4 +430,26 @@ func commit(args []string) error {
 		return errors.New("authentication required: pass --token or set JIKKO_TOKEN")
 	}
 	return w.Commit(actor, strings.Join(args, " "), *operation)
+}
+
+func exportWorkspace(args []string) error {
+	var output *string
+	args, dir, _, err := flags("export", args, func(f *flag.FlagSet) {
+		output = f.String("output", "jikko-workspace.zip", "output ZIP path")
+	})
+	if err != nil {
+		return err
+	}
+	if len(args) != 0 {
+		return errors.New("usage: jikko export [flags]")
+	}
+	w, err := openWorkspace(*dir)
+	if err != nil {
+		return err
+	}
+	data, err := w.ExportZIP()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(*output, data, 0644)
 }
