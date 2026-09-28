@@ -40,7 +40,11 @@ func usage() {
 	fmt.Println(`jikko <command> [flags]
 
   list    list pages visible to you
-  show    print one page
+  show    print one or more pages (batch reads)
+  tree    list the permission-filtered workspace tree
+  mentions list pages addressing the authenticated identity
+  create  create a Markdown document or task
+  commit  record changes with actor-attributed Git audit trailers
   set     set a metadata property
   perm    grant or clear a capability on a page
   auth    create or revoke a credential
