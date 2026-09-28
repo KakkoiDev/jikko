@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read\n  pull-requests: write
 
 jobs:
   test:
@@ -17,15 +17,20 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Canonicalize Go formatting on this branch
+      - name: Report canonical gofmt diff
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gofmt -w .
           if ! git diff --quiet; then
-            git config user.name "Jikko CI"
-            git config user.email "jikko-ci@local"
-            git add .
-            git commit -m "Apply gofmt"
-            git push origin HEAD:agent-workspace-operations
+            {
+              echo 'Canonical gofmt diff:'
+              echo '\`\`\`diff'
+              git diff
+              echo '\`\`\`'
+            } > /tmp/gofmt-comment.md
+            gh pr comment 18 --body-file /tmp/gofmt-comment.md
+            exit 1
           fi
       - name: Build
         run: go build ./...
