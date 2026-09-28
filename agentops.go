@@ -54,7 +54,7 @@ func (w *Workspace) Mentions(actor string) []*Page {
 		return nil
 	}
 	names := map[string]bool{
-		strings.TrimSuffix(person.Path, ".md"): true,
+		strings.TrimSuffix(person.Path, ".md"):                true,
 		strings.TrimSuffix(filepath.Base(person.Path), ".md"): true,
 	}
 	for _, candidate := range w.sorted() {
