@@ -22,10 +22,10 @@ Native mode keeps the existing HTMX -> HTTP -> Go server path. Offline mode keep
 
 ```sh
 GOOS=js GOARCH=wasm go build -o jikko.wasm ./cmd/jikko-wasm
-cd browser && npm ci
+cd browser\nnpm install\nnpm run build
 ```
 
-Load Go's standard `wasm_exec.js`, instantiate `jikko.wasm`, then create an `OfflineBackend` from `offline.js`.
+Load Go's standard `wasm_exec.js`, instantiate `jikko.wasm`, then load the bundled modules from `browser/dist/`. isomorphic-git and the OPFS adapter are bundled into these files, so the deployed offline runtime has no CDN or npm dependency.
 
 ## Storage and Git
 
