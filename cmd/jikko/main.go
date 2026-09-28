@@ -21,7 +21,8 @@ func main() {
 	}
 	commands := map[string]func([]string) error{
 		"list": list, "show": show, "auth": auth, "set": set,
-		"perm": perm, "serve": serve, "check": check,\n\t\t"tree": tree, "mentions": mentions, "create": create, "commit": commit,
+		"perm": perm, "serve": serve, "check": check,
+		"tree": tree, "mentions": mentions, "create": create, "commit": commit,
 	}
 	run, ok := commands[os.Args[1]]
 	if !ok {
