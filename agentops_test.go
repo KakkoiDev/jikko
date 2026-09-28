@@ -48,7 +48,7 @@ func TestMentionsIncludesTransitiveGroup(t *testing.T) {
 	w, err := Open(root); if err != nil { t.Fatal(err) }
 	got := w.Mentions("cassian")
 	found := false
-	for _, p := range got { if p.Path == "message.md" { found = true } }
+	for _, p := range got {\n\t\tif p.Path == "message.md" {\n\t\t\tfound = true\n\t\t}\n\t}
 	if !found { t.Fatalf("transitive group mention missing: %#v", got) }
 }
 
