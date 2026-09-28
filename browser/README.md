@@ -1,20 +1,52 @@
 # Jikko in the browser
 
-The browser runtime is a deployment target for the same Go core, not a second Jikko implementation.
+The browser runtime is a serverless deployment target for the same Go core, not a second Jikko implementation.
+
+## Architecture
+
+```text
+same HTMX frontend contract
+        |
+  offline transport
+        |
+  Jikko Go/WASM
+        |
+  OPFS workspace
+        |
+  isomorphic-git
+```
+
+Native mode keeps the existing HTMX -> HTTP -> Go server path. Offline mode keeps HTMX as the UI and maps application requests to the local WASM backend. There is no application server in offline mode.
 
 ## Build
 
 ```sh
 GOOS=js GOARCH=wasm go build -o jikko.wasm ./cmd/jikko-wasm
+cd browser && npm ci
 ```
 
-Load Go's standard `wasm_exec.js`, instantiate `jikko.wasm`, then import `browser/jikko.js`.
+Load Go's standard `wasm_exec.js`, instantiate `jikko.wasm`, then create an `OfflineBackend` from `offline.js`.
 
-## Storage
+## Storage and Git
 
-OPFS is the durable browser backing store. The adapter hydrates Jikko's Go/WASM core from OPFS; parsing, references, permissions and navigation remain implemented by the same Go package used by the native CLI.
+`@componentor/fs` supplies an OPFS-backed Node-compatible filesystem. Jikko uses its asynchronous API, so static hosting does not require SharedArrayBuffer or COOP/COEP headers. isomorphic-git stores a normal `.git` directory in the same browser filesystem.
 
-The initial browser primitives intentionally mirror the agent/native runtime:
+Browser Git currently exposes local repository operations:
+
+- status
+- add/remove during commit
+- commit with `Jikko-Actor` and `Jikko-Operation` trailers
+- log
+- branches
+- branch creation
+- checkout
+- merge
+
+Remote fetch/push is deliberately deferred because browser Git hosting has authentication and CORS policy concerns. The local repository format remains Git-compatible, so sync can be added without changing Jikko's workspace model.
+
+## Jikko primitives
+
+The Go/WASM API mirrors the permission-aware native runtime:
 
 - `tree(handle, actor)`
 - `read(handle, actor, ref)`
@@ -23,6 +55,8 @@ The initial browser primitives intentionally mirror the agent/native runtime:
 - `exportWorkspaceZIP(handle)`
 - `downloadWorkspaceZIP(handle, filename)`
 
-ZIP export is a core Jikko operation. It contains workspace source and assets while excluding `.git/`, `.data/` and `.auth.md`. Browser and native callers therefore share the same portable backup format.
+OPFS owns durable browser bytes. Go/WASM owns Jikko parsing, references, permissions and navigation. isomorphic-git owns Git semantics. HTMX owns the UI interaction contract.
 
-The current adapter performs a hydration copy from OPFS into the Go WASM virtual filesystem. This deliberately proves API/semantic parity first. The next storage optimization is an OPFS-backed FileStore so large workspaces can be accessed lazily without changing the public browser primitives.
+ZIP export remains independent of Git and is a first-class Jikko core operation. It contains workspace source and assets while excluding `.git/`, `.data/` and `.auth.md`, so a portable backup never depends on Git history being healthy.
+
+The current WASM adapter hydrates workspace files into Go's WASM virtual filesystem. The public API is intentionally storage-independent; a direct lazy OPFS FileStore can replace hydration later without changing callers.
