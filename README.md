@@ -103,7 +103,31 @@ reported rather than fatal, so one bad file never makes the rest of a workspace
 unreadable, but a file whose access policy cannot be evaluated is denied to
 everyone until it is fixed.
 
-> **Current limitation:** the implementation can inspect, mutate, and serve a workspace, but the source-first browser editor, comments/mentions/identity collaboration, Git history/merge integration, uploads, media embeds, Mermaid, and semantic rename are roadmap work.
+> **Current limitation:** the implementation can inspect, mutate, and serve a workspace, but the source-first browser editor, comments/mentions/identity collaboration, automatic Git transaction/merge integration, uploads, media embeds, Mermaid, and semantic rename are roadmap work.
+
+## Agent workspace operations
+
+Agents should discover context explicitly rather than receiving a heuristic context dump. Jikko exposes the permission-filtered workspace and lets the authenticated model decide what to read:
+
+```sh
+jikko tree --dir /path/to/workspace --json
+jikko show identity/cassian strategy/current intelligence/malrec --dir /path/to/workspace --json
+jikko mentions --dir /path/to/workspace --json
+jikko create memory/talos --dir /path/to/workspace --body '# Talos\nNever forget.'
+jikko create tasks/defend-sol --dir /path/to/workspace --type task --body '# Defend Sol'
+```
+
+`tree` never includes pages the authenticated identity cannot read, so it does not disclose forbidden paths. `show` accepts one or many references for efficient batch retrieval. `mentions` derives direct and transitive group mentions from Markdown; no duplicate inbox is stored. Creation remains source-first Markdown and is validated before the workspace is refreshed.
+
+Identity is authentication context, not an automatic prompt dump: the harness tells an agent which Identity it authenticated as, while the agent may read that Identity page when it needs its authored biography, role, or other knowledge.
+
+Git-backed workspaces can record a logical batch of semantic mutations with actor attribution:
+
+```sh
+jikko commit --operation agent-turn 'Cassian turn 428'
+```
+
+The commit carries `Jikko-Actor` and `Jikko-Operation` trailers. Git remains optional and Markdown remains authoritative.
 
 ## Core model
 
