@@ -41,8 +41,16 @@ Browser Git currently exposes local repository operations:
 - branch creation
 - checkout
 - merge
+- add/configure a remote
+- enumerate remote branches
+- fetch one branch
+- pull one branch
+- push one branch
+- sync the currently checked-out branch
 
-Remote fetch/push is deliberately deferred because browser Git hosting has authentication and CORS policy concerns. The local repository format remains Git-compatible, so sync can be added without changing Jikko's workspace model.
+Remote operations accept authentication from the calling application through an `onAuth` callback/object. Jikko does not store provider credentials in workspace files and does not impose provider-specific login semantics. Browser hosts must still satisfy the remote provider's CORS/authentication requirements.
+
+Branch meaning is deliberately outside Jikko. A caller may use branches for releases, experiments, universes, timelines, or anything else; Jikko only supplies Git capability.
 
 ## Jikko primitives
 
