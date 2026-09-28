@@ -1,0 +1,9 @@
+{
+  "name": "@jikko/browser-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@componentor/fs": "^1.0.0",
+    "isomorphic-git": "^1.37.4"
+  }
+}
