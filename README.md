@@ -103,6 +103,24 @@ reported rather than fatal, so one bad file never makes the rest of a workspace
 unreadable, but a file whose access policy cannot be evaluated is denied to
 everyone until it is fixed.
 
+### Browser/WASM and portable workspaces
+
+Jikko's Go core is also a browser target:
+
+```sh
+GOOS=js GOARCH=wasm go build -o jikko.wasm ./cmd/jikko-wasm
+```
+
+The browser adapter exposes the same permission-aware navigation/read semantics (`tree`, `read`, `readMany`, `mentions`) while OPFS supplies durable browser storage. Browser storage is an adapter concern; Markdown remains the workspace model.
+
+Portable export is first-class in the core and CLI:
+
+```sh
+jikko export --dir /path/to/workspace --output workspace.zip
+```
+
+The ZIP contains source and assets but deliberately excludes Git internals, derived `.data`, and credentials in `.auth.md`. The browser API can produce/download the same ZIP. See [browser/README.md](browser/README.md).
+
 > **Current limitation:** the implementation can inspect, mutate, and serve a workspace, but the source-first browser editor, comments/mentions/identity collaboration, automatic Git transaction/merge integration, uploads, media embeds, Mermaid, and semantic rename are roadmap work.
 
 ## Agent workspace operations
