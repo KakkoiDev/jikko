@@ -68,3 +68,10 @@ OPFS owns durable browser bytes. Go/WASM owns Jikko parsing, references, permiss
 ZIP export remains independent of Git and is a first-class Jikko core operation. It contains workspace source and assets while excluding `.git/`, `.data/` and `.auth.md`, so a portable backup never depends on Git history being healthy.
 
 The current WASM adapter hydrates workspace files into Go's WASM virtual filesystem. The public API is intentionally storage-independent; a direct lazy OPFS FileStore can replace hydration later without changing callers.
+
+
+### GitHub from a static browser
+
+GitHub does not expose Git smart-HTTP with the CORS headers needed for direct browser fetch/push. Jikko therefore also provides `GitHubRemote` in `github.js`. It uses GitHub's Git Database REST API to atomically create trees/commits and move branch refs without a CORS proxy.
+
+This is a transport adapter, not application semantics. Callers still decide what a branch means. Credentials are supplied by the caller and are never persisted by the adapter.
