@@ -432,15 +432,24 @@ func commit(args []string) error {
 	return w.Commit(actor, strings.Join(args, " "), *operation)
 }
 
-
 func exportWorkspace(args []string) error {
 	var output *string
 	args, dir, _, err := flags("export", args, func(f *flag.FlagSet) {
 		output = f.String("output", "jikko-workspace.zip", "output ZIP path")
 	})
-	if err != nil { return err }
-	if len(args) != 0 { return errors.New("usage: jikko export [flags]") }
-	w, err := openWorkspace(*dir); if err != nil { return err }
-	data, err := w.ExportZIP(); if err != nil { return err }
+	if err != nil {
+		return err
+	}
+	if len(args) != 0 {
+		return errors.New("usage: jikko export [flags]")
+	}
+	w, err := openWorkspace(*dir)
+	if err != nil {
+		return err
+	}
+	data, err := w.ExportZIP()
+	if err != nil {
+		return err
+	}
 	return os.WriteFile(*output, data, 0644)
 }
