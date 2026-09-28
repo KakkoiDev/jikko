@@ -24,7 +24,7 @@ func (w *Workspace) Commit(actor, message, operation string) error {
 	if err := gitRun(w.Root, "rev-parse", "--is-inside-work-tree"); err != nil {
 		return fmt.Errorf("workspace is not Git-backed: %w", err)
 	}
-	if err := gitRun(w.Root, "add", "--", "."); err != nil { return err }
+	if err := gitRun(w.Root, "add", "--", "."); err != nil {\n\t\treturn err\n\t}
 	// Do not create empty audit commits.
 	check := exec.Command("git", "-C", w.Root, "diff", "--cached", "--quiet", "--exit-code")
 	if err := check.Run(); err == nil {
