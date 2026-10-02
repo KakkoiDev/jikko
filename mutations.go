@@ -78,6 +78,12 @@ func (w *Workspace) SetPermission(actor, ref, capability string, subjects ...str
 // resulting workspace is no worse than the current one. It enforces optimistic
 // concurrency, writes atomically, and rolls back on rejection.
 func (w *Workspace) mutate(actor string, p *Page, edit func(*yaml.Node) error) error {
+	return w.mutateFile(actor, p, func(raw []byte) ([]byte, error) { return rewriteFrontmatter(raw, edit) })
+}
+
+// mutateFile applies rewrite to a page's raw source under the same guards as
+// mutate.
+func (w *Workspace) mutateFile(actor string, p *Page, rewrite func([]byte) ([]byte, error)) error {
 	if actorPage, ok := w.ResolveIdentity(actor); ok {
 		actor = strings.TrimSuffix(actorPage.Path, ".md")
 	}
@@ -92,7 +98,7 @@ func (w *Workspace) mutate(actor string, p *Page, edit func(*yaml.Node) error) e
 	if fingerprint(raw) != p.rev {
 		return fmt.Errorf("%s changed on disk after it was read; re-read the workspace and retry", p.Path)
 	}
-	next, err := rewriteFrontmatter(raw, edit)
+	next, err := rewrite(raw)
 	if err != nil {
 		return fmt.Errorf("%s: %w", p.Path, err)
 	}

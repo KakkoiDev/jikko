@@ -236,3 +236,18 @@ func TestParseKindFlag(t *testing.T) {
 		t.Fatalf("empty = %v %v", k, err)
 	}
 }
+
+func TestIdentityFilter(t *testing.T) {
+	dir := workspace(t, map[string]string{
+		"alice.md": "---\ntype: identity\n---\n# Alice\n",
+		"open.md":  "# Open\n",
+	})
+	h := newServer(dir, false).routes()
+	if !strings.Contains(get(t, h, "/").Body.String(), `hx-get="/pages?type=identity"`) {
+		t.Fatal("identity filter missing")
+	}
+	body := get(t, h, "/pages?type=identity").Body.String()
+	if !strings.Contains(body, "Alice") || strings.Contains(body, "Open") {
+		t.Fatalf("identity filter body = %q", body)
+	}
+}
