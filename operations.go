@@ -56,6 +56,9 @@ func (w *Workspace) ReplaceBody(actor, ref, body string) error {
 			if bytes.HasPrefix(raw, []byte("---")) {
 				return nil, errors.New(`frontmatter opens with "---" but has no closing "---" line; fix the file before mutating it`)
 			}
+			if strings.HasPrefix(body, "---") {
+				return nil, errors.New(`body must not open with a "---" frontmatter fence; use set or perm to change metadata`)
+			}
 			return []byte(body), nil
 		}
 		next := append([]byte(nil), raw[:len(raw)-len(old)]...)

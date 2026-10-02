@@ -3,6 +3,7 @@ package jikko
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -100,7 +101,28 @@ func TestReplaceBodyKeepsFrontmatterBytes(t *testing.T) {
 	}
 }
 
-// A body that would leave the workspace with an unparseable source is
+func TestReplaceBodyRefusesFrontmatterFence(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+	write(t, root, "note.md", "# Note\nold\n")
+	w, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = w.ReplaceBody("alice", "note", "---\npermissions:\n  read: alice\n---\n# Note\n")
+	if err == nil || !strings.Contains(err.Error(), "use set or perm") {
+		t.Fatalf("frontmatter injected through body: err = %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "note.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "# Note\nold\n" {
+		t.Fatalf("note.md = %q, want unchanged", got)
+	}
+}
+
+// A mutation that would leave the workspace with an unparseable source is
 // rejected and the file is restored.
 func TestReplaceBodyFailsClosed(t *testing.T) {
 	root := t.TempDir()
@@ -110,8 +132,9 @@ func TestReplaceBodyFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.ReplaceBody("alice", "note", "---\nstatus: [\n---\n# Note\n"); err == nil {
-		t.Fatal("body introducing a workspace problem accepted")
+	write(t, root, "other.md", "---\nstatus: [\n---\n# Other\n")
+	if err := w.ReplaceBody("alice", "note", "# Note\nnew\n"); err == nil {
+		t.Fatal("mutation introducing a workspace problem accepted")
 	}
 	got, err := os.ReadFile(filepath.Join(root, "note.md"))
 	if err != nil {
