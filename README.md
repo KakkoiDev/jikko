@@ -6,7 +6,7 @@ Jikko is a human-readable workspace where humans and agents define, discuss, tra
 
 Jikko is the authoritative place for the work. Humans and agents are expected to read the relevant Jikko context before acting and to return goals, discussions, decisions, progress, and evidence to Jikko. External conversations may help, but they are not project knowledge until recorded in the workspace.
 
-A workspace is ordinary files. YAML frontmatter adds explicit semantics, `[[links]]` express relationships, `![[embeds]]` compose files, inline comments keep unresolved review attached to source, and `@mentions` address humans, agents, and groups. Git is planned as the reference harness substrate for audit/history and three-way text merge.
+A workspace is ordinary files. YAML frontmatter adds explicit semantics, `[[links]]` express relationships, `![[embeds]]` compose files, inline comments keep unresolved review attached to source, and `@mentions` address humans, agents, and groups. Git is the reference harness substrate for audit/history: `jikko commit` records actor-attributed commits, and the browser runtime exposes Git status, commit, log, branches, merge, and remote sync. Automatic Git transactions and native three-way text merge are planned.
 
 ## Quickstart tutorial
 
@@ -121,7 +121,7 @@ jikko export --dir /path/to/workspace --output workspace.zip
 
 The ZIP contains source and assets but deliberately excludes Git internals, derived `.data`, and credentials in `.auth.md`. The browser API can produce/download the same ZIP. See [browser/README.md](browser/README.md).
 
-> **Current limitation:** the implementation can inspect, mutate, and serve a workspace, but the source-first browser editor, comments/mentions/identity collaboration, automatic Git transaction/merge integration, uploads, media embeds, Mermaid, and semantic rename are roadmap work.
+> **Current limitations:** `serve` provides login and a live page list; the source-first browser editor, inline comments, automatic Git transaction/merge integration (`jikko commit` is explicit), uploads, media embeds, Mermaid, and semantic rename are roadmap work.
 
 ## Agent workspace operations
 
