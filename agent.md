@@ -1,6 +1,6 @@
 # Jikko Agent Guide
 
-Read this first if you are an AI agent working on Jikko. For format details see `specification-v1.md`; `identity-permissions.md` is normative for the newer identity/authorization design and supersedes the older Group/namespaced-identity sections until the main specification is consolidated. Browser/product details live in `architecture-browser.md` and `ux-plan.md`.
+Read this first if you are an AI agent working on Jikko. For format details see `specification-v1.md`; `identity-permissions.md` is normative for identity, authentication boundaries, and authorization. Browser/product details live in `architecture-browser.md` and `ux-plan.md`.
 
 ## Core model
 
@@ -18,6 +18,22 @@ Document = information, composition, and durable discussion surface. Task = expl
 > The files describe what things are and explicitly relate them. The harness determines what can be done with that information.
 
 Never create a second source of truth.
+
+## Jikko is the go-to workspace
+
+Before acting, read the relevant Jikko Documents, Tasks, comments, and Views. Conduct project discussion in Jikko comments or Documents. Record material goals, questions, decisions, progress, blockers, and evidence there as the work proceeds—not only in an external chat or a final summary.
+
+External conversations are not authoritative project state until their material outcome is incorporated into Jikko. Another human or agent must be able to continue from Jikko without access to a private context window.
+
+Use the existing model rather than inventing file types:
+
+- define work in Documents and Tasks;
+- discuss it through Documents and comments;
+- track it through Task metadata and Views;
+- prove it with links, embeds, tests, commits, measurements, files, or approval;
+- audit it through attributed semantic mutations and Git history.
+
+Claim, checkpoint, evidence, decision, and event are useful concepts, but they are not additional primitives. Express them through Task metadata/content, comments, references, and history, and use runtime semantic operations so enforcement is consistent.
 
 ## Identity
 
@@ -112,6 +128,10 @@ The exact serialization is not frozen until parser compatibility is tested. Reso
 The Go core owns parsing, indexing, reference resolution, backlinks, identity membership, mentions, authorization, queries, safe mutations, uploads, rename rewriting, comments, and conflict semantics. CLI and HTTP are adapters.
 
 Prefer semantic operations and deterministic `--json`. Direct Markdown edits remain valid for complex content, followed by `jikko check`.
+
+`jikko set` changes one ordinary property and will not touch `permissions`; use `jikko perm` for access-control policy. Both refuse a change that would introduce a workspace problem, widen access beyond what you may administer, or leave a restricted file with no administrator, and both refuse to overwrite a file that changed after you read it. Re-read the workspace and retry rather than forcing the write.
+
+`jikko check` distinguishes unresolved references from workspace problems. Treat a problem as work to do: a file whose access policy cannot be evaluated is denied to everyone until it is fixed.
 
 A mutation should carry authenticated actor context. Do not automatically write `updated_by` into documents. Audit attribution belongs in Git/history unless identity is part of authored meaning.
 

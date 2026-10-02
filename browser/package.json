@@ -1,0 +1,16 @@
+{
+  "name": "@jikko/browser-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@componentor/fs": "4.3.1",
+    "isomorphic-git": "1.42.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10"
+  },
+  "scripts": {
+    "check": "node --check git.js && node --check github.js && node --check offline.js && node --check offline-htmx.js && node --check routes.js",
+    "build": "esbuild offline.js offline-htmx.js routes.js --bundle --format=esm --platform=browser --outdir=dist"
+  }
+}

@@ -2,6 +2,12 @@
 
 This document captures product decisions and open questions. It is a plan, not a promise that every item belongs in the core format.
 
+## Authoritative workspace
+
+Jikko is the only go-to place for project work and discussion. Both humans and agents should begin from the relevant Jikko context and keep material goals, questions, decisions, progress, blockers, and proof inside Documents, Tasks, and comments. External chat may be used as an interface, but its material outcome must be written back to Jikko; it is not a parallel source of truth.
+
+The UX must make this expectation obvious during onboarding and everyday use. Human and agent interfaces should surface relevant context before mutation and make recording discussion, progress, and evidence the natural path.
+
 ## Editing model
 
 Jikko is source-first. **No WYSIWYG document model.** Render Markdown when reading; when editing, expose the real Markdown source in the active context, inspired by Obsidian Live Preview.
@@ -24,6 +30,12 @@ Use `![[path]]` for Markdown, images, video, audio, PDF, and arbitrary files. Th
 
 Mermaid uses fenced `mermaid` source. Render diagrams in read mode and expose the real Mermaid source in edit mode. Review Mermaid security configuration before enabling workspace-authored diagrams.
 
+## Work model
+
+The product must make work definable, discussable, trackable, provable, and auditable while retaining the small primitive set. Claims, checkpoints, evidence, decisions, and events are behaviors or representations inside Documents, Tasks, comments, references, and history—not new page types.
+
+The runtime should provide structured operations and common views for these concepts. It should surface missing responsibility, unresolved blockers/discussion, broken evidence references, and configured completion requirements consistently to humans and agents. Hard requirements remain configurable so ordinary Markdown can enter Jikko incrementally.
+
 ## Inline comments: document as review surface and message board
 
 Comments stay in the Markdown they discuss rather than becoming detached database records or a new `type: comment`.
@@ -35,9 +47,9 @@ The harness should <!--comment:c17-->automatically update references<!--/comment
 when a file is renamed.
 
 <!--comment-thread:c17
-@human:alice: Should normal links update too?
+@alice: Should normal links update too?
 
-@agent:codex: Yes, links and embeds.
+@codex: Yes, links and embeds.
 -->
 ```
 
@@ -62,9 +74,9 @@ A Task marked done while unresolved comments remain should warn initially rather
 Canonical source mentions:
 
 ```md
-@human:alice
-@agent:codex
-@group:maintainers
+@alice
+@codex
+@maintainers
 ```
 
 `@mention` means attention. `assignee:` means responsibility.

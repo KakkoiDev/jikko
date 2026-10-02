@@ -39,6 +39,18 @@ Authentication MUST resolve to an individual Identity. An Identity containing `m
 
 The initial credential bootstrap is a harness-local administrative operation. A harness MUST NOT expose unauthenticated credential creation over an untrusted remote interface. Local bootstrap/recovery may rely on control of the workspace host as the external security boundary.
 
+## Unusable policy
+
+A `permissions` mapping that is present but cannot be evaluated MUST deny every
+capability to every caller. An unreadable policy is not the absence of a policy
+and MUST NOT be treated as open-by-default. This covers a `permissions` value
+that is not a mapping, an empty mapping, and a mapping that could not be parsed
+at all. The harness MUST report why.
+
+An individual grant inside an otherwise readable mapping that cannot be
+resolved -- an unknown or ambiguous Identity -- is skipped rather than fatal, so
+it can only withhold access, never widen it. It MUST still be reported.
+
 ## ACL integrity
 
 A Jikko harness MUST validate authorization references and reject or clearly report:
@@ -58,6 +70,10 @@ Group membership participates in authorization. Therefore a textual `write` gran
 Before accepting a membership mutation, the harness MUST evaluate whether the proposed graph change would change effective authorization. A caller MUST NOT be able to grant itself or another Identity capabilities that the caller is not authorized to administer merely by editing `members`.
 
 This rule is transitive across nested Identity groups.
+
+Membership is not the only field that carries authorization. Changing an Identity's `type`, or introducing a file whose name makes an existing Identity ambiguous, changes effective authorization just as much and MUST be evaluated the same way. The rule is about effect, not about which property was edited.
+
+The practical form of the rule is a comparison. A harness computes the effective authorization of the workspace before and after the proposed change and rejects the change if any Identity would gain a capability on a file the caller is not authorized to administer. A change that only narrows access grants nothing to anyone and therefore requires no such authority.
 
 ## v1 exclusions
 

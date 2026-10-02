@@ -32,16 +32,33 @@ Jikko separates portable authored data from runtime capabilities.
 8. Keep derived runtime data disposable and reproducible.
 9. Git provides audit/history and text merge for the reference harness; Git does not replace Jikko semantics.
 10. Do not add a primitive until substantially different workflows demonstrate that it is necessary.
+11. Jikko is the authoritative workspace for both humans and agents; relevant work and discussion MUST be recorded in Jikko to become durable project knowledge.
+
+## 2.1 Work model and runtime contract
+
+Jikko work is:
+
+- **Definable:** goals, requirements, acceptance criteria, constraints, and responsibilities can be represented in Documents and Tasks.
+- **Discussable:** Documents and Tasks carry durable discussion through comments. Discussion inside Jikko is project knowledge.
+- **Trackable:** Task state, responsibility, dependencies, blockers, and progress can be queried and projected through Views.
+- **Provable:** claims of completion can cite commits, tests, files, measurements, screenshots, external references, or explicit review approval.
+- **Auditable:** authored changes, semantic operations, actor attribution, and historical discussion can be reconstructed from Jikko source plus the reference harness history.
+
+Jikko is the go-to workspace, not an export target for a separate conversation system. Humans and agents MUST read relevant Jikko context before acting and MUST record material goals, questions, decisions, progress, blockers, and evidence in Jikko. An external conversation is not authoritative project state until its material outcome is recorded in a Jikko Document, Task, or comment.
+
+This model does not introduce Claim, Checkpoint, Evidence, Decision, Event, Message, or Chat file types. These are semantics expressed through Task metadata, Document/Task content, comments, links, embeds, and harness history.
+
+The harness MUST expose semantic operations and validation that preserve this model. It MUST keep comments attached to their context, preserve actor attribution, make task state and responsibility queryable, validate resolvable proof references where possible, and surface unmet configured completion requirements. Enforcement MAY be a warning when hard rejection would make ordinary Markdown unusable, but it MUST be deterministic and available to both browser and machine interfaces.
 
 ## 3. Fundamental file semantics
 
 Every Jikko source object is a Markdown file with optional YAML frontmatter and a Markdown body.
 
 ```text
-no type       -> Document
-type: task    -> Task
-type: view    -> View
-type: group   -> Group
+no type        -> Document
+type: task     -> Task
+type: view     -> View
+type: identity -> Identity
 ```
 
 ### 3.1 Document
@@ -61,7 +78,7 @@ status: doing
 start: 2026-09-15
 due: 2026-09-20
 tags: [architecture]
-assignee: agent:codex
+assignee: codex
 ---
 
 # Implement session persistence
@@ -93,28 +110,28 @@ view:
 
 A View MUST NOT use its body for arbitrary narrative content or stored query results. Narrative composition belongs in a Document.
 
-### 3.4 Group
+### 3.4 Identity
 
-A Group is explicitly declared with `type: group`.
+An Identity is explicitly declared with `type: identity`. Identity is the single actor primitive and is normative in [identity-permissions.md](identity-permissions.md).
+
+An Identity without `members` represents an individual. An Identity with `members` represents a group of identities:
 
 ```md
 ---
-type: group
+type: identity
 members:
-  - human:alice
-  - agent:codex
+  - alice
+  - codex
 ---
 
 # Maintainers
 ```
 
-Groups are a core primitive because membership is expected to participate in mentions, assignment, identity organization, and authorization/admin roles.
+There are no separate Human, Agent, Group, Team, Person, or Role primitives. Membership is transitive, reverse membership is derived, and cycles or dangling members MUST be reported by the harness.
 
-Canonical actor identities use namespaces such as `human:name` and `agent:name`. Group references use `group:name`.
+Identities are addressed directly, such as `@alice`, `@codex`, or `@maintainers`. Identity is not authentication; the harness authenticates a caller and maps it to one individual Identity.
 
-A group MAY later carry authorization policy, but the exact permissions schema is an open design question. A group that participates in authorization MUST NOT be self-escalatable through an operation the requesting actor is not already authorized to perform.
-
-Jikko authorization applies to actions through the harness. Direct filesystem/Git access remains governed by the operating system and repository access; Jikko MUST NOT pretend to sandbox an actor that already has unrestricted filesystem write access.
+Authorization semantics are defined in [identity-permissions.md](identity-permissions.md). A mutation MUST NOT allow an actor to escalate its own effective authorization.
 
 ## 4. Metadata
 
@@ -122,7 +139,7 @@ Jikko uses YAML frontmatter for structured metadata. Unknown properties are allo
 
 Tags are ordinary metadata. The core imposes no tag hierarchy, inheritance, or namespace semantics.
 
-Do not store information twice when it can be reliably derived. For example, `@agent:codex` in authored Markdown is sufficient for the harness to derive a mention index; a duplicate `mentions:` property is not required.
+Do not store information twice when it can be reliably derived. For example, `@codex` in authored Markdown is sufficient for the harness to derive a mention index; a duplicate `mentions:` property is not required.
 
 ## 5. References and embeds
 
@@ -144,7 +161,7 @@ Examples:
 ![[paper.pdf]]
 ```
 
-A harness chooses presentation from the resolved target. Markdown renders as document/task/view/group content as appropriate; common media render natively; unknown types fall back to a file card/link.
+A harness chooses presentation from the resolved target. Markdown renders as document/task/view/identity content as appropriate; common media render natively; unknown types fall back to a file card/link.
 
 Embedded Markdown remains a reference to the source file, never a copied representation.
 
@@ -190,9 +207,9 @@ The harness should <!--comment:c17-->automatically update references<!--/comment
 when a file is renamed.
 
 <!--comment-thread:c17
-@human:alice: Should normal links update too?
+@alice: Should normal links update too?
 
-@agent:codex: Yes, links and embeds.
+@codex: Yes, links and embeds.
 -->
 ```
 
@@ -216,9 +233,9 @@ Current Markdown therefore contains current unresolved discussion; Git contains 
 Canonical mention syntax is source-native:
 
 ```md
-@human:alice
-@agent:codex
-@group:maintainers
+@alice
+@codex
+@maintainers
 ```
 
 Namespaces keep human, agent, and group identities unambiguous. A UI MAY render friendlier labels while preserving canonical source.
@@ -355,6 +372,11 @@ The following are deliberately not separate core primitives:
 - Agent
 - Message
 - Chat
+- Claim
+- Checkpoint
+- Evidence
+- Decision
+- Event
 - Comment
 - Department
 - Workspace hierarchy
@@ -368,7 +390,7 @@ The following are deliberately not separate core primitives:
 - CRDT/OT collaboration
 - Git LFS/large-file subsystem
 
-`Group` is intentionally a core primitive because it has earned semantics across addressing, assignment/organization, and authorization.
+`Identity` is the single actor primitive. Individual and group actors are expressed through Identity membership rather than separate Human, Agent, Group, Team, Person, or Role types.
 
 ## 18. Core summary
 
@@ -376,12 +398,12 @@ The following are deliberately not separate core primitives:
 DOCUMENT = information, composition, and durable discussion surface
 TASK     = information with explicit actionable semantics
 VIEW     = pure selection plus presentation hints
-GROUP    = named actor membership for addressing and authorization
+IDENTITY = individual or group actor for addressing, assignment, and authorization
 
 LINK     = authored relationship
 BACKLINK = derived relationship
 EMBED    = composition
-COMMENT  = authored unresolved review state inside Markdown
+COMMENT  = authored durable discussion/review state inside Markdown
 MENTION  = authored request for attention
 ASSIGNEE = authored responsibility
 GIT      = reference harness history/audit/merge substrate

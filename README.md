@@ -1,8 +1,10 @@
 # Jikko
 
-**Structured work in plain Markdown — for humans and agents.**
+**Define, discuss, track, prove, and audit work in plain Markdown — for humans and agents.**
 
-Jikko is a filesystem-native format for turning Markdown knowledge into actionable, collaborative work without locking the source into a particular application.
+Jikko is a human-readable workspace where humans and agents define, discuss, track, prove, and audit work together without locking the source into a particular application.
+
+Jikko is the authoritative place for the work. Humans and agents are expected to read the relevant Jikko context before acting and to return goals, discussions, decisions, progress, and evidence to Jikko. External conversations may help, but they are not project knowledge until recorded in the workspace.
 
 A workspace is ordinary files. YAML frontmatter adds explicit semantics, `[[links]]` express relationships, `![[embeds]]` compose files, inline comments keep unresolved review attached to source, and `@mentions` address humans, agents, and groups. Git is planned as the reference harness substrate for audit/history and three-way text merge.
 
@@ -17,6 +19,9 @@ go run ./cmd/jikko serve --dir /path/to/workspace
 ```
 
 Open the address printed by `serve` (currently `http://127.0.0.1:8080` by default).
+It binds to localhost and has no transport security of its own; put it behind a
+TLS-terminating reverse proxy and pass `--behind-proxy` to reach it from
+elsewhere.
 
 A normal document needs no type:
 
@@ -33,28 +38,28 @@ A task is explicit:
 type: task
 status: todo
 due: 2026-09-20
-assignee: agent:codex
+assignee: codex
 ---
 
 # Implement session persistence
 
-@agent:codex follow [[session-design]].
+@codex follow [[session-design]].
 ```
 
-A group is explicit:
+An identity may represent an individual or a group:
 
 ```md
 ---
-type: group
+type: identity
 members:
-  - human:alice
-  - agent:codex
+  - alice
+  - codex
 ---
 
 # Maintainers
 ```
 
-Mention it with `@group:maintainers`.
+Mention it with `@maintainers`.
 
 Compose another file with an embed:
 
@@ -75,23 +80,102 @@ go run ./cmd/jikko check --dir /path/to/workspace
 
 `--json` is intended for agents/scripts. Markdown remains source of truth regardless of whether a human, browser, or agent edits it.
 
-> **Current limitation:** the implementation can inspect and serve a workspace, but the source-first browser editor, comments/mentions/groups implementation, Git history/merge integration, uploads, media embeds, Mermaid, semantic rename, and mutation commands are roadmap work.
+Authenticated callers can make structured edits. A metadata mutation rewrites
+only the property it names, leaving key order, comments, YAML types, and the
+Markdown body untouched:
+
+```sh
+export JIKKO_TOKEN="$(go run ./cmd/jikko auth create alice --dir /path/to/workspace)"
+go run ./cmd/jikko set session-design status doing --dir /path/to/workspace
+go run ./cmd/jikko perm session-design read alice maintainers --dir /path/to/workspace
+```
+
+`set` refuses to touch `permissions`, because access-control policy is a
+mapping rather than a value; `perm` edits it. Both are judged by their effect:
+a change is rejected if it introduces a workspace problem, widens anyone's
+access beyond what you may administer, or leaves a restricted file with no
+administrator.
+
+`check` reports unresolved references together with workspace problems —
+malformed frontmatter, unknown types, views carrying a body, membership cycles,
+and access policies naming identities that do not resolve. A problem is
+reported rather than fatal, so one bad file never makes the rest of a workspace
+unreadable, but a file whose access policy cannot be evaluated is denied to
+everyone until it is fixed.
+
+### Browser/WASM and portable workspaces
+
+Jikko's Go core is also a browser target:
+
+```sh
+GOOS=js GOARCH=wasm go build -o jikko.wasm ./cmd/jikko-wasm
+```
+
+The browser adapter exposes the same permission-aware navigation/read semantics (`tree`, `read`, `readMany`, `mentions`) while OPFS supplies durable browser storage. Browser storage is an adapter concern; Markdown remains the workspace model.
+
+Portable export is first-class in the core and CLI:
+
+```sh
+jikko export --dir /path/to/workspace --output workspace.zip
+```
+
+The ZIP contains source and assets but deliberately excludes Git internals, derived `.data`, and credentials in `.auth.md`. The browser API can produce/download the same ZIP. See [browser/README.md](browser/README.md).
+
+> **Current limitation:** the implementation can inspect, mutate, and serve a workspace, but the source-first browser editor, comments/mentions/identity collaboration, automatic Git transaction/merge integration, uploads, media embeds, Mermaid, and semantic rename are roadmap work.
+
+## Agent workspace operations
+
+Agents should discover context explicitly rather than receiving a heuristic context dump. Jikko exposes the permission-filtered workspace and lets the authenticated model decide what to read:
+
+```sh
+jikko tree --dir /path/to/workspace --json
+jikko show identity/cassian strategy/current intelligence/malrec --dir /path/to/workspace --json
+jikko mentions --dir /path/to/workspace --json
+jikko create memory/talos --dir /path/to/workspace --body '# Talos\nNever forget.'
+jikko create tasks/defend-sol --dir /path/to/workspace --type task --body '# Defend Sol'
+```
+
+`tree` never includes pages the authenticated identity cannot read, so it does not disclose forbidden paths. `show` accepts one or many references for efficient batch retrieval. `mentions` derives direct and transitive group mentions from Markdown; no duplicate inbox is stored. Creation remains source-first Markdown and is validated before the workspace is refreshed.
+
+Identity is authentication context, not an automatic prompt dump: the harness tells an agent which Identity it authenticated as, while the agent may read that Identity page when it needs its authored biography, role, or other knowledge.
+
+Git-backed workspaces can record a logical batch of semantic mutations with actor attribution:
+
+```sh
+jikko commit --operation agent-turn 'Cassian turn 428'
+```
+
+The commit carries `Jikko-Actor` and `Jikko-Operation` trailers. Git remains optional and Markdown remains authoritative.
 
 ## Core model
 
 ```text
-no type       -> Document
-type: task    -> Task
-type: view    -> View
-type: group   -> Group
+no type        -> Document
+type: task     -> Task
+type: view     -> View
+type: identity -> Identity
 ```
 
 - **Document** — information, composition, and durable discussion surface.
 - **Task** — explicit actionable semantics.
 - **View** — pure selection plus optional presentation hints.
-- **Group** — named actor membership for addressing and future authorization/admin roles.
+- **Identity** — an addressable individual or group used for mentions, assignment, and authorization.
 
-Comments, Messages, Chats, Humans, and Agents are deliberately not additional file types. Inline unresolved comments live in the Markdown they discuss. Canonical actor/mention namespaces are `human:name`, `agent:name`, and `group:name`; `@mention` means attention while `assignee:` means responsibility.
+Document, Task, and View are the three work-content primitives. Identity is the single actor primitive. Comments, Messages, Chats, Humans, Agents, and Groups are deliberately not additional file types. Inline comments live in the Markdown they discuss. Identities are addressed directly, such as `@alice` or `@maintainers`; `@mention` means attention while `assignee:` means responsibility.
+
+## Work model
+
+Jikko keeps its conceptual model small. Claim, checkpoint, evidence, decision, and event are capabilities or conventions around Documents and Tasks, not additional content types. The runtime interprets and enforces their semantics through structured mutations, validation, history, and views.
+
+- **Definable** — goals, requirements, acceptance criteria, constraints, and responsibilities can be written clearly.
+- **Discussable** — humans and agents hold persistent discussions through Documents and comments. Discussion is workspace content, not disposable chat.
+- **Trackable** — Tasks expose their state, assignee, dependencies, blockers, and progress.
+- **Provable** — completion can be supported by commits, tests, files, measurements, screenshots, external references, or review approval.
+- **Auditable** — Git history and Jikko activity/history expose who changed what, when, and why.
+
+The runtime must help users satisfy this model without multiplying primitives: validate structured fields and references, expose unresolved discussion and incomplete work, preserve actor attribution, require authorization for mutations, and warn or reject completion when configured proof requirements are unmet.
+
+> **If work matters to the project, it belongs in Jikko.**
 
 ## Source-first collaboration direction
 
@@ -134,7 +218,7 @@ The CLI is Jikko's initial machine interface. Semantic mutations must remain str
 
 The core currently scans Markdown directly into memory. There is deliberately no database or persistent `.data` index yet.
 
-The browser harness stays server-first: HTMX 4 for requests/swaps, hx-live for tiny local behavior, SSE by default for server-to-browser updates, and Basecoat CSS for presentation. HTMAX 4.0.0 and Basecoat 1.0.2 CSS are vendored/embedded, so runtime does not require CDN/npm/network access.
+The browser harness stays server-first: HTMX 4 for requests/swaps, hx-live for tiny local behavior, SSE by default for server-to-browser updates, and Basecoat CSS for presentation. HTMX 4.0.0 and Basecoat 1.0.2 CSS are vendored/embedded, so runtime does not require CDN/npm/network access.
 
 See [architecture-browser.md](architecture-browser.md) for browser architecture, [agent.md](agent.md) for AI-agent orientation, [ux-plan.md](ux-plan.md) for product/collaboration decisions, and [specification-v1.md](specification-v1.md) for source semantics.
 
