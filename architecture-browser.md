@@ -48,7 +48,7 @@ Browser and native workspaces use Git-compatible history. The browser Git adapte
 
 Jikko deliberately does **not** assign application meaning to branches. It does not know about games, universes, save slots, experiments, or timelines. Applications own branch naming and selective-sync policy.
 
-Authentication is injected by the host application and must never be persisted into Jikko source files. Provider-specific OAuth/device-flow behavior and CORS/proxy policy stay outside the Jikko core.
+Authentication is injected by the host application and must never be persisted into Jikko source files. Offline mode is single-user local mode: the host binds one individual Identity when it opens the workspace, the Go core validates it, and every operation acts as it; a call cannot name another actor. Browser storage is the security boundary there, as the filesystem is for a native workspace, so permissions filter what the bound Identity sees but are not a sandbox against the device owner. Provider-specific OAuth/device-flow behavior and CORS/proxy policy stay outside the Jikko core.
 
 ## HTMX boundary
 

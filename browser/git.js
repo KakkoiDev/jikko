@@ -39,6 +39,12 @@ export class BrowserGit {
   }
 
   async commit({message, actor, operation = "workspace-mutation", author}) {
+    // Both values are written into the trailer block. A line break or other
+    // whitespace would let a caller append a forged Jikko-Actor trailer, as
+    // the native harness also refuses.
+    for (const [name, value] of [["operation", operation], ["actor", actor || "browser"]]) {
+      if (!value || /[\s\p{Cc}]/u.test(value)) throw new Error(`${name} ${JSON.stringify(value)} must be a single word`);
+    }
     await this.ensureRepository();
     await this.addAll();
     const identity = author || {

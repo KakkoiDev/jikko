@@ -169,7 +169,7 @@ Jikko's Go core is also a browser target:
 GOOS=js GOARCH=wasm go build -o jikko.wasm ./cmd/jikko-wasm
 ```
 
-The browser adapter exposes the same permission-aware navigation/read semantics (`tree`, `read`, `readMany`, `mentions`) while OPFS supplies durable browser storage. Browser storage is an adapter concern; Markdown remains the workspace model.
+The browser adapter exposes the same permission-aware semantics (`tree`, `read`, `readMany`, `mentions`, `view`, `render`, `check`) while OPFS supplies durable browser storage. It runs in single-user local mode: the host application binds the identity it vouches for when it opens the workspace. Browser storage is an adapter concern; Markdown remains the workspace model.
 
 Portable export is first-class in the core and CLI:
 

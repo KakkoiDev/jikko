@@ -33,6 +33,8 @@ If a `permissions` mapping is present, each declared grant is evaluated through 
 
 A workspace MAY operate locally without authentication while no Jikko operation requires an authenticated Identity. Authentication becomes necessary when the harness must evaluate identity-specific permissions or attribute an authenticated operation.
 
+The reference harness's browser runtime (WASM over OPFS) is such a local mode. It holds no credentials; the host application binds one individual Identity when it opens the workspace, every operation acts as that Identity, and the device owner's browser storage is the security boundary.
+
 The reference harness uses `jikko auth create <identity>` to create a credential for an existing individual Identity. The credential hash is stored in the gitignored `.auth.md`; the bearer token is displayed once.
 
 Authentication MUST resolve to an individual Identity. An Identity containing `members` is a group and cannot directly authenticate.

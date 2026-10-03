@@ -21,6 +21,8 @@ jobs:
         run: go build ./...
       - name: WASM build
         run: GOOS=js GOARCH=wasm go build -o /tmp/jikko.wasm ./cmd/jikko-wasm
+      - name: WASM tests
+        run: GOOS=js GOARCH=wasm go test -exec="$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./cmd/jikko-wasm
       - name: Browser dependencies
         working-directory: browser
         run: npm install --ignore-scripts --package-lock=false && npm run check && npm run build
