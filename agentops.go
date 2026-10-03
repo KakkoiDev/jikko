@@ -53,17 +53,24 @@ func (w *Workspace) Mentions(actor string) []*Page {
 	if !ok || len(person.Members) != 0 {
 		return nil
 	}
-	names := map[string]bool{
-		strings.TrimSuffix(person.Path, ".md"):                true,
-		strings.TrimSuffix(filepath.Base(person.Path), ".md"): true,
+	names := map[string]bool{}
+	// An identity answers to its path and, when that resolves to it alone, to
+	// its bare name. An ambiguous bare name addresses nobody.
+	address := func(p *Page) {
+		names[identityRef(p)] = true
+		if base := stemOf(p.Path); base != identityRef(p) {
+			if r, ok := w.Resolve(base); ok && r == p {
+				names[base] = true
+			}
+		}
 	}
+	address(person)
 	for _, candidate := range w.sorted() {
 		if candidate.Kind != Identity || len(candidate.Members) == 0 {
 			continue
 		}
 		if w.containsIdentity(candidate, person.Path, map[string]bool{}) {
-			names[strings.TrimSuffix(candidate.Path, ".md")] = true
-			names[strings.TrimSuffix(filepath.Base(candidate.Path), ".md")] = true
+			address(candidate)
 		}
 	}
 	var out []*Page
@@ -77,7 +84,9 @@ func (w *Workspace) Mentions(actor string) []*Page {
 				return
 			}
 			for _, m := range mentionPattern.FindAllStringSubmatch(line, -1) {
-				if names[m[2]] {
+				// Sentence punctuation is not part of the name: "@alice." and
+				// "@alice/" address alice.
+				if names[strings.TrimRight(m[2], "./-")] {
 					found = true
 					return
 				}

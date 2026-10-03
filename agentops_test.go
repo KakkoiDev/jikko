@@ -203,3 +203,74 @@ func TestCreatePageRefusesHarnessState(t *testing.T) {
 		t.Fatal("credential file written")
 	}
 }
+
+func mentionPaths(w *Workspace, actor string) []string {
+	var out []string
+	for _, p := range w.Mentions(actor) {
+		out = append(out, p.Path)
+	}
+	return out
+}
+
+// "Thanks @alice." is the ordinary way to end a sentence; the full stop used
+// to become part of the name, so the mention reached nobody.
+func TestMentionsIgnoreTrailingPunctuation(t *testing.T) {
+	root := t.TempDir()
+	writeTestPage(t, root, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+	writeTestPage(t, root, "people/bob.md", "---\ntype: identity\n---\n# Bob\n")
+	writeTestPage(t, root, "end.md", "# End\nThanks @alice.\n")
+	writeTestPage(t, root, "path.md", "# Path\nAsk @people/bob.\n")
+	writeTestPage(t, root, "comma.md", "# Comma\n(@alice, @people/bob)\n")
+	writeTestPage(t, root, "email.md", "# Email\nmail alice@alice.example or x@alice\n")
+	writeTestPage(t, root, "code.md", "# Code\n`@alice` and\n```\n@alice\n```\n")
+	writeTestPage(t, root, "other.md", "# Other\n@alicex @alice_b\n")
+	w, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(mentionPaths(w, "alice"), ","); got != "comma.md,end.md" {
+		t.Fatalf("alice mentions = %s", got)
+	}
+	if got := strings.Join(mentionPaths(w, "people/bob"), ","); got != "comma.md,path.md" {
+		t.Fatalf("bob mentions = %s", got)
+	}
+	if got := w.Mentions("nobody"); got != nil {
+		t.Fatalf("unknown identity has mentions: %v", got)
+	}
+}
+
+// A bare name shared by two identities resolves to neither, so it must not
+// count as a mention of both.
+func TestAmbiguousMentionAddressesNobody(t *testing.T) {
+	root := t.TempDir()
+	writeTestPage(t, root, "people/sam.md", "---\ntype: identity\n---\n# Sam\n")
+	writeTestPage(t, root, "bots/sam.md", "---\ntype: identity\n---\n# Sam bot\n")
+	writeTestPage(t, root, "bare.md", "# Bare\n@sam hi\n")
+	writeTestPage(t, root, "full.md", "# Full\n@people/sam hi\n")
+	w, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(mentionPaths(w, "people/sam"), ","); got != "full.md" {
+		t.Fatalf("people/sam mentions = %s", got)
+	}
+	if got := mentionPaths(w, "bots/sam"); len(got) != 0 {
+		t.Fatalf("bots/sam mentions = %v", got)
+	}
+}
+
+// Mentions are permission-filtered: a forbidden page never surfaces, even when
+// it addresses the caller.
+func TestMentionsRespectReadPermission(t *testing.T) {
+	root := t.TempDir()
+	writeTestPage(t, root, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+	writeTestPage(t, root, "bob.md", "---\ntype: identity\n---\n# Bob\n")
+	writeTestPage(t, root, "s.md", "---\npermissions:\n  admin: bob\n---\n# S\n@alice see this\n")
+	w, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mentionPaths(w, "alice"); len(got) != 0 {
+		t.Fatalf("forbidden page surfaced: %v", got)
+	}
+}
