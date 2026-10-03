@@ -245,3 +245,186 @@ func TestCapabilityStringIsTotal(t *testing.T) {
 		t.Fatal("zero capability must not panic or vanish")
 	}
 }
+
+// Deleting an identity file used to make its credentials unrevocable, and they
+// authenticated again as soon as an identity of that name reappeared.
+func TestRevokeCredentialsOfDeletedIdentity(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+	writeTest(t, d, "bob.md", "---\ntype: identity\n---\n# Bob\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliceToken, err := w.CreateCredential("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobToken, err := w.CreateCredential("bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(d, "alice.md")); err != nil {
+		t.Fatal(err)
+	}
+	if w, err = Open(d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Authenticate(aliceToken); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("credential of a deleted identity: %v", err)
+	}
+	if err := w.RevokeCredentials("alice"); err != nil {
+		t.Fatalf("orphaned credential not revocable: %v", err)
+	}
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n# New Alice\n")
+	if w, err = Open(d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Authenticate(aliceToken); err == nil {
+		t.Fatal("revoked token authenticated the recreated identity")
+	}
+	if p, err := w.Authenticate(bobToken); err != nil || p.Path != "bob.md" {
+		t.Fatalf("unrelated credential lost: %v", err)
+	}
+	if err := w.RevokeCredentials("ghost"); err == nil {
+		t.Fatal("revoking an unknown name with no credentials must be reported")
+	}
+	if err := w.RevokeCredentials("bob"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Authenticate(bobToken); err == nil {
+		t.Fatal("revoked token still authenticates")
+	}
+}
+
+// A credential is stored under the identity's path, so a page that later makes
+// the bare name ambiguous does not redirect it to someone else.
+func TestCredentialBoundToIdentityPath(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "people/alice.md", "---\ntype: identity\n---\n# Alice\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := w.CreateCredential("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := LoadAuth(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Credentials) != 1 || a.Credentials[0].Identity != "people/alice" {
+		t.Fatalf("credentials = %#v", a.Credentials)
+	}
+	writeTest(t, d, "bots/alice.md", "---\ntype: identity\n---\n# Alice bot\n")
+	if w, err = Open(d); err != nil {
+		t.Fatal(err)
+	}
+	actor, err := w.ActorForToken(token)
+	if err != nil || actor != "people/alice" {
+		t.Fatalf("actor = %q, %v", actor, err)
+	}
+}
+
+// A credential whose identity became a group no longer authenticates.
+func TestCredentialOfIdentityTurnedGroup(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+	writeTest(t, d, "bob.md", "---\ntype: identity\n---\n# Bob\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := w.CreateCredential("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTest(t, d, "alice.md", "---\ntype: identity\nmembers: [bob]\n---\n# Alice\n")
+	if w, err = Open(d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Authenticate(token); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("group authenticated: %v", err)
+	}
+	if _, err := w.CreateCredential("missing"); err == nil {
+		t.Fatal("credential for a missing identity")
+	}
+}
+
+func TestLoadAuthRejectsIncompleteCredential(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, ".auth.md"), []byte("---\ncredentials:\n  - identity: alice\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAuth(d); err == nil || !strings.Contains(err.Error(), "missing identity or token_hash") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(d, ".auth.md"), []byte("---\ncredentials: [\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAuth(d); err == nil {
+		t.Fatal("invalid YAML accepted")
+	}
+}
+
+func TestAuthTrackedByGit(t *testing.T) {
+	root := gitWorkspace(t)
+	if AuthTrackedByGit(root) {
+		t.Fatal("untracked file reported as tracked")
+	}
+	write(t, root, ".auth.md", "---\ncredentials: []\n---\n")
+	gitOutput(t, root, "add", "-f", ".auth.md")
+	if !AuthTrackedByGit(root) {
+		t.Fatal("tracked credential file not detected")
+	}
+}
+
+func TestParseCapability(t *testing.T) {
+	for in, want := range map[string]Capability{"read": Read, "COMMENT": Comment, "Write": Write, "admin": Admin} {
+		if got, ok := ParseCapability(in); !ok || got != want {
+			t.Fatalf("ParseCapability(%q) = %v, %v", in, got, ok)
+		}
+	}
+	if _, ok := ParseCapability("owner"); ok {
+		t.Fatal("unknown capability accepted")
+	}
+}
+
+// Every capability below a grant is included, and grants through several
+// groups are additive.
+func TestCapabilityHierarchyAndAdditiveGrants(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "readers.md", "---\ntype: identity\nmembers: [alice]\n---\n")
+	writeTest(t, d, "writers.md", "---\ntype: identity\nmembers: alice\n---\n")
+	writeTest(t, d, "s.md", "---\npermissions:\n  read: readers\n  write: [ghost, writers]\n  bogus: alice\n---\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := w.Pages["s.md"]
+	for c, want := range map[Capability]bool{Read: true, Comment: true, Write: true, Admin: false} {
+		if got := w.Allowed("alice", p, c); got != want {
+			t.Fatalf("alice %v = %v, want %v", c, got, want)
+		}
+	}
+	if w.Allowed("readers", p, Read) {
+		t.Fatal("a group is never the acting identity")
+	}
+	if w.Allowed("alice", nil, Read) {
+		t.Fatal("nil page allowed")
+	}
+	if !problem(w, "s.md", `unknown permission "bogus"`) || !problem(w, "s.md", `unresolved permission identity "ghost"`) {
+		t.Fatalf("problems = %#v", w.Problems)
+	}
+	if got := w.Administrators(p); len(got) != 0 {
+		t.Fatalf("administrators = %v", got)
+	}
+	if err := w.CanChangeMembers("alice", "alice"); err == nil {
+		t.Fatal("an individual is not a group")
+	}
+	if err := w.CanChangeMembers("alice", "missing"); err == nil {
+		t.Fatal("missing group accepted")
+	}
+}
