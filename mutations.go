@@ -212,6 +212,12 @@ func rewriteFrontmatter(raw []byte, edit func(*yaml.Node) error) ([]byte, error)
 	if err := edit(mapping); err != nil {
 		return nil, err
 	}
+	// An edit that added nothing to a page without frontmatter is a no-op.
+	// Writing an empty "{}" block would change the file and leave a flow-style
+	// mapping that every later edit inherits.
+	if !hasFront && len(mapping.Content) == 0 {
+		return raw, nil
+	}
 
 	var encoded bytes.Buffer
 	enc := yaml.NewEncoder(&encoded)

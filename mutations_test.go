@@ -344,3 +344,167 @@ func TestMutationPreservesByteOrderMark(t *testing.T) {
 		})
 	}
 }
+
+// Values and keys are YAML-encoded, never spliced: a line break followed by a
+// fence or a policy cannot escape the property it was given to.
+func TestSetMetadataCannotInjectFrontmatter(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "bob.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "s.md", "---\npermissions:\n  write: alice\n  admin: bob\n---\n# S\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{
+		"note":                          "x\n---\npermissions:\n  admin: alice\n---\n",
+		"note2":                         "x\npermissions:\n  admin: alice",
+		"a\npermissions":                "{admin: alice}",
+		"b\n---\npermissions:\n  admin": "alice",
+	} {
+		if err := w.SetMetadata("alice", "s", key, value); err != nil {
+			continue // refusing is fine too
+		}
+		p := w.Pages["s.md"]
+		if w.Allowed("alice", p, Admin) {
+			t.Fatalf("set %q=%q escalated alice to admin", key, value)
+		}
+		if p.Body != "# S\n" {
+			t.Fatalf("body changed: %q", p.Body)
+		}
+		if got, ok := p.Metadata[key].(string); !ok || got != value {
+			t.Fatalf("metadata[%q] = %#v, want the literal value", key, p.Metadata[key])
+		}
+	}
+	if len(w.Problems) != 0 {
+		t.Fatalf("problems = %#v", w.Problems)
+	}
+}
+
+func TestSetMetadataRefusals(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "bob.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "s.md", "---\npermissions:\n  read: bob\n  admin: alice\n---\n# S\n")
+	writeTest(t, d, "open.md", "---\nunclosed: true\n# Open\n")
+	writeTest(t, d, "seq.md", "---\n- a\n---\n# Seq\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ actor, ref, key, want string }{
+		{"alice", "missing", "status", "not found"},
+		{"alice", "s", " ", "property name required"},
+		{"alice", "s", "permissions", "use `jikko perm"},
+		{"bob", "s", "status", "lacks write"},
+		{"alice", "open", "status", "no closing"},
+		{"alice", "seq", "status", "not a YAML mapping"},
+	}
+	for _, c := range cases {
+		err := w.SetMetadata(c.actor, c.ref, c.key, "done")
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("SetMetadata(%s, %s, %q) = %v, want %q", c.actor, c.ref, c.key, err, c.want)
+		}
+	}
+	if err := w.SetMetadataWithToken("jk_bad", "s", "status", "x"); err == nil {
+		t.Fatal("bad token accepted")
+	}
+	token, err := w.CreateCredential("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetMetadataWithToken(token, "s", "status", "done"); err != nil {
+		t.Fatal(err)
+	}
+	if w.Pages["s.md"].Metadata["status"] != "done" {
+		t.Fatal("token mutation not applied")
+	}
+}
+
+// A comma-separated value creates a list; an existing list stays a list.
+func TestSetMetadataLists(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "t.md", "---\ntags: [a]\n---\n# T\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetMetadata("", "t", "tags", "x, y"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetMetadata("", "t", "owners", "alice, bob"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetMetadata("", "t", "single", "solo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetMetadata("", "t", "tags", ""); err != nil {
+		t.Fatal(err)
+	}
+	m := w.Pages["t.md"].Metadata
+	if got, ok := m["owners"].([]any); !ok || len(got) != 2 || got[1] != "bob" {
+		t.Fatalf("owners = %#v", m["owners"])
+	}
+	if got, ok := m["tags"].([]any); !ok || len(got) != 0 {
+		t.Fatalf("tags = %#v", m["tags"])
+	}
+	if m["single"] != "solo" {
+		t.Fatalf("single = %#v", m["single"])
+	}
+}
+
+func TestSetPermissionEdits(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "bob.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "carol.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "doc.md", "# Doc\n")
+	writeTest(t, d, "broken.md", "---\npermissions: alice\n---\n# Broken\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetPermission("alice", "doc", "owner", "alice"); err == nil {
+		t.Fatal("unknown capability accepted")
+	}
+	if err := w.SetPermission("alice", "doc", "read", "ghost"); err == nil {
+		t.Fatal("unknown identity accepted")
+	}
+	if err := w.SetPermission("alice", "missing", "read", "alice"); err == nil {
+		t.Fatal("missing page accepted")
+	}
+	// Clearing a grant on an open file is a no-op, not an empty policy.
+	// It used to write an empty "{}" frontmatter block, which every later
+	// edit then inherited as a flow-style mapping.
+	if err := w.SetPermission("alice", "doc", "read"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(d, "doc.md")); string(b) != "# Doc\n" {
+		t.Fatalf("no-op edit rewrote the file: %q", b)
+	}
+	// Restricting an open file: the policy must keep an administrator.
+	if err := w.SetPermission("alice", "doc", "read", "bob"); err == nil {
+		t.Fatal("policy with no administrator accepted")
+	}
+	if err := w.SetPermission("alice", "doc", "admin", "alice.md", " ", "carol"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetPermission("alice", "doc", "read", "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetPermission("bob", "doc", "admin", "bob"); err == nil {
+		t.Fatal("reader granted itself admin")
+	}
+	if err := w.SetPermission("carol", "doc", "read"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(d, "doc.md"))
+	if got, want := string(b), "---\npermissions:\n  admin:\n    - alice\n    - carol\n---\n# Doc\n"; got != want {
+		t.Fatalf("doc.md = %q, want %q", got, want)
+	}
+	// A policy that cannot be evaluated denies everyone, admin included, so it
+	// cannot be repaired through Jikko: that is host-local recovery.
+	if err := w.SetPermission("alice", "broken", "admin", "alice"); err == nil {
+		t.Fatal("unusable policy edited")
+	}
+}
