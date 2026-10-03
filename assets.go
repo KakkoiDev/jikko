@@ -112,3 +112,41 @@ func (w *Workspace) UnresolvedReferences() ([]Problem, error) {
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
 }
+
+// ReadableFile resolves a workspace file the actor may fetch: a
+// non-Markdown file that a page the actor may read links or embeds. Files
+// carry no access policy of their own, so they take it from the pages that
+// use them; a file no readable page references is not served at all, and
+// neither is harness state, a symbolic link, or a dotfile. It returns the
+// file's path on disk.
+func (w *Workspace) ReadableFile(actor, rel string) (string, bool) {
+	rel = strings.TrimPrefix(path.Clean("/"+filepath.ToSlash(rel)), "/")
+	if rel == "" || reservedPath(rel) {
+		return "", false
+	}
+	for _, part := range strings.Split(rel, "/") {
+		if strings.HasPrefix(part, ".") {
+			return "", false
+		}
+	}
+	idx, err := w.assets()
+	if err != nil || !idx.paths[rel] {
+		return "", false
+	}
+	for _, p := range w.sorted() {
+		if !w.Allowed(actor, p, Read) {
+			continue
+		}
+		refs := append(append([]string{}, p.Links...), p.Embeds...)
+		if p.Kind == Task {
+			proofs, _ := taskRefs(p, "proof")
+			refs = append(refs, proofs...)
+		}
+		for _, ref := range refs {
+			if f, ok, _ := idx.resolve(p.Path, ref); ok && f == rel {
+				return filepath.Join(w.Root, filepath.FromSlash(rel)), true
+			}
+		}
+	}
+	return "", false
+}

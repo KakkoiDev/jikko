@@ -431,6 +431,10 @@ Folders organize files but carry no Jikko semantics. Meaning comes from content 
 
 A rendering harness MUST detect recursive embed cycles and stop expansion safely.
 
+### 16.1 Reference harness reading
+
+The reference harness renders Markdown with its own small renderer in the Go core, safe by construction: every character of source is escaped and the only elements in the output are those the renderer writes. Raw HTML in a page is shown as text, never passed through; the specification nowhere asks for HTML passthrough. Links take only `http`, `https`, `mailto`, and same-site targets. `[[links]]` and `![[embeds]]` render as links or expansions only for pages the reader may read; an embed of a forbidden page renders exactly like a missing one. Embedded Markdown expands inside a bordered container, an embed of a page already being expanded stops with a visible note, and nesting stops at five levels. Images, video, and audio embed natively and other files as a download card. A workspace file is served only to a reader of some page that links or embeds it (or cites it as `proof`), and never when it is harness state, a symbolic link, or a dotfile. Mermaid source is shown as source; no diagram script runs. Comment anchors render as highlights linked to their thread, and threads are left out of the body for a sidebar.
+
 ## 17. Non-goals for v1
 
 The following are deliberately not separate core primitives:
