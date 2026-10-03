@@ -166,12 +166,23 @@ type server struct {
 	tmpl       *template.Template
 	trustProxy bool
 	streams    chan struct{}
+	// csrfKey signs the anti-forgery tokens of this process's forms.
+	csrfKey []byte
 }
 
+// pageData is what every template renders. Only the fields of the page being
+// shown are set.
 type pageData struct {
 	Pages []*jikko.Page
 	Query string
 	Actor string
+	// CSRF is the anti-forgery token every form posts back.
+	CSRF    string
+	Flash   string
+	Error   string
+	Message string
+	Detail  *detailView
+	Edit    *editView
 }
 
 func serve(args []string) error {
@@ -207,12 +218,17 @@ func serve(args []string) error {
 }
 
 func newServer(root string, trustProxy bool) *server {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		panic(err)
+	}
 	return &server{
 		cache:      &cache{dir: root},
 		sessions:   newSessionStore(),
-		tmpl:       template.Must(template.New("jikko").Parse(pageHTML + pagesHTML)),
+		tmpl:       template.Must(template.New("jikko").Funcs(templateFuncs).ParseFS(jikkoweb.Templates, "templates/*.html")),
 		trustProxy: trustProxy,
 		streams:    make(chan struct{}, maxStreams),
+		csrfKey:    key,
 	}
 }
 
@@ -223,6 +239,11 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/logout", s.logout)
 	mux.HandleFunc("/pages", s.pages)
 	mux.HandleFunc("/events", s.events)
+	mux.HandleFunc("GET /p/{path...}", s.pageDetail)
+	mux.HandleFunc("GET /edit/{path...}", s.editPage)
+	mux.HandleFunc("POST /save/{path...}", s.savePage)
+	mux.HandleFunc("POST /comment/{path...}", s.commentPage)
+	mux.HandleFunc("GET /files/{path...}", s.serveFile)
 	mux.HandleFunc("/", s.index)
 	return securityHeaders(mux)
 }
@@ -322,10 +343,15 @@ func (s *server) data(r *http.Request, extend bool) (pageData, error) {
 // render executes a template for the caller and also reports who the caller
 // was, so a live stream can notice when that changes.
 func (s *server) render(name string, r *http.Request, extend bool) (string, string, error) {
+	return s.renderCSRF(name, r, extend, "")
+}
+
+func (s *server) renderCSRF(name string, r *http.Request, extend bool, csrf string) (string, string, error) {
 	data, err := s.data(r, extend)
 	if err != nil {
 		return "", "", err
 	}
+	data.CSRF = csrf
 	var b bytes.Buffer
 	if err := s.tmpl.ExecuteTemplate(&b, name, data); err != nil {
 		return "", "", err
@@ -338,7 +364,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	out, _, err := s.render("page", r, true)
+	out, _, err := s.renderCSRF("page", r, true, s.csrfFor(w, r))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -362,8 +388,10 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !sameOrigin(r) {
-		http.Error(w, "cross-site request rejected", http.StatusForbidden)
+	// A token is a few dozen bytes; there is no reason to buffer megabytes of
+	// form body from an unauthenticated caller.
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
+	if !s.postAllowed(w, r) {
 		return
 	}
 	ws, err := s.cache.load()
@@ -371,9 +399,6 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	// A token is a few dozen bytes; there is no reason to buffer megabytes of
-	// form body from an unauthenticated caller.
-	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
 	p, credential, err := ws.AuthenticateCredential(r.FormValue("token"))
 	if err != nil {
 		log.Printf("login rejected: %v", err)
@@ -394,8 +419,8 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !sameOrigin(r) {
-		http.Error(w, "cross-site request rejected", http.StatusForbidden)
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
+	if !s.postAllowed(w, r) {
 		return
 	}
 	if c, err := r.Cookie(sessionCookie); err == nil {
@@ -512,6 +537,3 @@ func assetHandler() http.Handler {
 		files.ServeHTTP(w, r)
 	})
 }
-
-const pageHTML = `{{define "page"}}<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jikko</title><link rel="stylesheet" href="/assets/basecoat.min.css"><script src="/assets/htmx.min.js"></script></head><body class="bg-background text-foreground"><main class="mx-auto max-w-4xl p-6 md:p-10"><header class="mb-8 flex items-center justify-between"><div><h1 class="text-3xl font-semibold tracking-tight">Jikko</h1><p class="text-muted-foreground">Structured work in plain Markdown.</p></div>{{if .Actor}}<form method="post" action="/logout"><span>{{.Actor}}</span> <button class="btn" data-variant="outline">Log out</button></form>{{else}}<form method="post" action="/login" class="flex gap-2"><input name="token" type="password" placeholder="Token" required><button class="btn">Log in</button></form>{{end}}</header><nav class="mb-6 flex gap-2"><button class="btn" data-variant="outline" hx-get="/pages" hx-target="#pages" hx-swap="outerHTML">All</button><button class="btn" data-variant="outline" hx-get="/pages?type=task" hx-target="#pages" hx-swap="outerHTML">Tasks</button><button class="btn" data-variant="outline" hx-get="/pages?type=view" hx-target="#pages" hx-swap="outerHTML">Views</button><button class="btn" data-variant="outline" hx-get="/pages?type=identity" hx-target="#pages" hx-swap="outerHTML">Identities</button></nav>{{template "pages" .}}</main></body></html>{{end}}`
-const pagesHTML = `{{define "pages"}}<section id="pages" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML"><div class="item-group">{{range .Pages}}<article class="item" data-variant="outline"><section><h3>{{.Title}}</h3><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.</p></section></article>{{end}}</div></section>{{end}}`

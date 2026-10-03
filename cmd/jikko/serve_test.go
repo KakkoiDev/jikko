@@ -105,14 +105,11 @@ func TestLoginExchangesTokenForSession(t *testing.T) {
 	h := s.routes()
 
 	post := func(target, token string, headers map[string]string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodPost, target, strings.NewReader(url.Values{"token": {token}}.Encode()))
-		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		for k, v := range headers {
-			r.Header.Set(k, v)
-		}
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, r)
-		return rec
+		return postForm(t, h, target, url.Values{"token": {token}}, nil, func(r *http.Request) {
+			for k, v := range headers {
+				r.Header.Set(k, v)
+			}
+		})
 	}
 
 	if rec := post("/login", "jk_wrong", nil); rec.Code != http.StatusUnauthorized {
@@ -278,14 +275,58 @@ func TestIdentityFilter(t *testing.T) {
 // loggedIn returns a session cookie for identity, created through /login.
 func loggedIn(t *testing.T, h http.Handler, token string) *http.Cookie {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(url.Values{"token": {token}}.Encode()))
-	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, r)
+	rec := postForm(t, h, "/login", url.Values{"token": {token}}, nil, nil)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("login = %d", rec.Code)
 	}
 	return rec.Result().Cookies()[0]
+}
+
+var csrfField = regexp.MustCompile(`name="_csrf" value="([^"]+)"`)
+
+// formToken fetches the anti-forgery token the home page renders for a
+// caller with the given cookies. It returns the token and the cookies the
+// caller holds afterwards.
+func formToken(t *testing.T, h http.Handler, cookies []*http.Cookie) (string, []*http.Cookie) {
+	t.Helper()
+	rec := getWith(h, "/", func(r *http.Request) {
+		for _, c := range cookies {
+			r.AddCookie(c)
+		}
+	})
+	m := csrfField.FindStringSubmatch(rec.Body.String())
+	if m == nil {
+		t.Fatalf("no anti-forgery token on the page (status %d)", rec.Code)
+	}
+	return m[1], append(append([]*http.Cookie(nil), cookies...), rec.Result().Cookies()...)
+}
+
+// postForm posts a form the way the browser interface does: with the
+// caller's cookies and a valid anti-forgery token.
+func postForm(t *testing.T, h http.Handler, target string, form url.Values, cookies []*http.Cookie, mod func(*http.Request)) *httptest.ResponseRecorder {
+	t.Helper()
+	token, cookies := formToken(t, h, cookies)
+	form = cloneValues(form)
+	form.Set("_csrf", token)
+	r := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, c := range cookies {
+		r.AddCookie(c)
+	}
+	if mod != nil {
+		mod(r)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec
+}
+
+func cloneValues(v url.Values) url.Values {
+	out := url.Values{}
+	for k, vs := range v {
+		out[k] = append([]string(nil), vs...)
+	}
+	return out
 }
 
 func getWith(h http.Handler, target string, mod func(*http.Request)) *httptest.ResponseRecorder {
@@ -401,10 +442,10 @@ func TestLogoutEndsTheSession(t *testing.T) {
 		t.Fatal("cross-site request ended the session")
 	}
 
-	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
-	r.AddCookie(c)
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, r)
+	if rec := postForm(t, h, "/logout", nil, []*http.Cookie{c}, func(r *http.Request) { r.Form = nil; r.Body = http.NoBody }); rec.Code != http.StatusForbidden {
+		t.Fatalf("logout without a token = %d", rec.Code)
+	}
+	rec = postForm(t, h, "/logout", nil, []*http.Cookie{c}, nil)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("logout = %d", rec.Code)
 	}
@@ -600,7 +641,8 @@ func TestLoginBodyIsBounded(t *testing.T) {
 // An unreadable workspace answers 503 without disclosing filesystem detail.
 func TestUnreadableWorkspaceFailsWithoutLeaking(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "gone")
-	h := newServer(dir, false).routes()
+	s := newServer(dir, false)
+	h := s.routes()
 	for _, target := range []string{"/", "/pages"} {
 		rec := get(t, h, target)
 		if rec.Code != http.StatusServiceUnavailable {
@@ -610,8 +652,10 @@ func TestUnreadableWorkspaceFailsWithoutLeaking(t *testing.T) {
 			t.Fatalf("%s leaked detail: %q", target, rec.Body.String())
 		}
 	}
-	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("token=x"))
+	pre := strings.Repeat("p", 43)
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(url.Values{"token": {"x"}, "_csrf": {s.sign("pre", pre)}}.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.AddCookie(&http.Cookie{Name: preSessionCookie, Value: pre})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 	if rec.Code != http.StatusServiceUnavailable {

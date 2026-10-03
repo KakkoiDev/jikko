@@ -19,6 +19,12 @@ go run ./cmd/jikko serve --dir /path/to/workspace
 ```
 
 Open the address printed by `serve` (currently `http://127.0.0.1:8080` by default).
+Log in with a token from `jikko auth create` to edit: every page has a detail
+view with its rendered Markdown, properties, backlinks, and a discussion
+sidebar, and those who may change it get a fields-and-body editor, a raw source
+editor, and comment, reply, and resolve forms. A save made against an old
+revision is merged with the concurrent change or shown as a side-by-side
+conflict to settle. Views render as boards, tables, or lists.
 It binds to localhost and has no transport security of its own; put it behind a
 TLS-terminating reverse proxy and pass `--behind-proxy` to reach it from
 elsewhere.
@@ -173,7 +179,7 @@ jikko export --dir /path/to/workspace --output workspace.zip
 
 The ZIP contains source and assets but deliberately excludes Git internals, derived `.data`, and credentials in `.auth.md`. The browser API can produce/download the same ZIP. See [browser/README.md](browser/README.md).
 
-> **Current limitation:** the implementation can inspect, mutate, comment on, and serve a workspace, but the source-first browser editor, browser comment sidebar, automatic Git commits, uploads, media embeds, and Mermaid are roadmap work.
+> **Current limitation:** uploads, Mermaid diagram rendering (source is shown), live in-place editing of embedded pages, automatic Git commits, and server-sent refresh of an open page are roadmap work.
 
 ## Agent workspace operations
 

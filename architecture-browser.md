@@ -52,6 +52,8 @@ Authentication is injected by the host application and must never be persisted i
 
 ## HTMX boundary
 
+The templates live in `web/templates` and are embedded with the static assets, so any harness that serves the interface uses the same markup. Pages are server-rendered by the Go core's Markdown renderer; HTMX posts the edit and comment forms and swaps the returned `#page` section in place, and every form also works as a plain post without script. `web/assets/jikko.js` only copies a text selection into the new-comment form.
+
 Native HTMX requests go to HTTP routes. Offline HTMX actions are intercepted by the offline transport and dispatched to `OfflineBackend`. Templates and interaction intent should stay shared; transport-specific code must not become application state.
 
 SSE remains useful in server mode. Offline mode does not emulate SSE: local mutations can trigger the same fragment refresh directly.

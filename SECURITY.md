@@ -56,3 +56,30 @@ Every response from `jikko serve` carries a Content Security Policy that
 allows only the server's own scripts, styles, and connections and forbids
 framing (`frame-ancestors 'none'`), together with `X-Content-Type-Options:
 nosniff`. The pages it serves need no inline script or style.
+
+## The browser interface
+
+Reading needs only the `read` capability a page's policy grants; editing,
+commenting, and the edit forms themselves are offered only to an
+authenticated caller with the capability, and every change goes through the
+same staged, authorized core operations as the CLI.
+
+Every state-changing request (`/login`, `/logout`, `/save/...`,
+`/comment/...`) must be same-origin by Fetch Metadata or `Origin`, and must
+carry an anti-forgery token: an HMAC, under a per-process key, of the
+session id or, before login, of a random pre-session cookie. Both cookies
+are `HttpOnly` and `SameSite=Strict`. A request authenticated with an
+`Authorization: Bearer` header carries no ambient credential and needs no
+token.
+
+Page Markdown is rendered by Jikko's own renderer, which escapes every
+character of source and emits only the elements it writes: raw HTML in a
+page is displayed as text, links accept only `http`, `https`, `mailto`, and
+same-site targets, and references or embeds of pages the reader may not
+read render as if missing.
+
+Workspace files (images, PDFs, and other attachments) carry no policy of
+their own. `/files/...` serves a file only to a reader of a page that links,
+embeds, or cites it, never a dotfile, harness state, or a symbolic link, and
+always with `Content-Security-Policy: default-src 'none'; sandbox`; types a
+browser would not display inline are sent as attachments.
