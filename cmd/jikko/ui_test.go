@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"html"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 type uiTeam struct {
@@ -572,5 +575,52 @@ func TestUploadForm(t *testing.T) {
 	}
 	if !strings.Contains(u.get(t, "bob", "/p/plan.md").Body.String(), `enctype="multipart/form-data"`) || strings.Contains(u.get(t, "carol", "/p/plan.md").Body.String(), "Upload and embed") {
 		t.Fatal("upload form offered to the wrong callers")
+	}
+}
+
+func TestPageEventsNotifyOnce(t *testing.T) {
+	u := uiWorkspace(t)
+	srv := httptest.NewServer(u.h)
+	defer srv.Close()
+	rev := regexp.MustCompile(`data-rev="([0-9a-f]+)"`).FindStringSubmatch(u.get(t, "bob", "/p/plan.md").Body.String())[1]
+	if !strings.Contains(u.get(t, "bob", "/edit/plan.md").Body.String(), `hx-sse:connect="/events/page/plan.md?mode=edit&amp;rev=`+rev+`"`) {
+		t.Fatal("the editor does not listen for changes")
+	}
+	open := func(who string) (*http.Response, context.CancelFunc) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/events/page/plan.md?mode=edit&rev="+rev, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := u.cookies[who]; c != nil {
+			req.AddCookie(c)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp, cancel
+	}
+	// A caller who may not read the page gets nothing, and the stream ends.
+	resp, cancel := open("")
+	body, err := io.ReadAll(resp.Body)
+	cancel()
+	resp.Body.Close()
+	if err != nil || len(body) != 0 {
+		t.Fatalf("anonymous stream: %q %v", body, err)
+	}
+	resp, cancel = open("bob")
+	defer cancel()
+	defer resp.Body.Close()
+	time.Sleep(1200 * time.Millisecond)
+	if err := os.WriteFile(filepath.Join(u.dir, "plan.md"), []byte(strings.Replace(u.read(t, "plan.md"), "Ship", "Release", 1)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	all, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(all), `data: <div id="jk-live"`) || !strings.Contains(string(all), "changed after you opened the editor") || strings.Count(string(all), "data:") != 1 {
+		t.Fatalf("stream = %q", all)
 	}
 }

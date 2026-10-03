@@ -13,10 +13,12 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	jikko "github.com/KakkoiDev/jikko"
 )
@@ -36,6 +38,9 @@ var templateFuncs = template.FuncMap{
 	"saveURL":    func(p string) string { return "/save/" + escapedPath(p) },
 	"commentURL": func(p string) string { return "/comment/" + escapedPath(p) },
 	"uploadURL":  func(p string) string { return "/upload/" + escapedPath(p) },
+	"liveURL": func(p, rev, mode string) string {
+		return "/events/page/" + escapedPath(p) + "?" + url.Values{"rev": {rev}, "mode": {mode}}.Encode()
+	},
 	"short": func(rev string) string {
 		if len(rev) > 12 {
 			return rev[:12]
@@ -624,6 +629,59 @@ func (s *server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.done(w, r, ws, actor, p.Path, fmt.Sprintf("Uploaded %s and embedded it at the end of the page.", res.Path))
+}
+
+// pageEvents tells an open page or editor, once, that its page changed on
+// disk after it was rendered (specification §11): it sends a notice that
+// replaces the listening element, which ends the subscription, and closes.
+// Like the list stream it never extends a session, and it closes as soon as
+// the caller is no longer who the request authenticated as or may no longer
+// read the page.
+func (s *server) pageEvents(w http.ResponseWriter, r *http.Request) {
+	rev := r.URL.Query().Get("rev")
+	editing := r.URL.Query().Get("mode") == "edit"
+	flusher, release, ok := s.openStream(w)
+	if !ok {
+		return
+	}
+	defer release()
+	ws, err := s.cache.load()
+	if err != nil {
+		return
+	}
+	actor := s.actor(r, ws, false)
+	expiry := time.After(streamMaxAge)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		ws, err := s.cache.load()
+		if err != nil {
+			return
+		}
+		if s.actor(r, ws, false) != actor {
+			return
+		}
+		pages, err := ws.ReadMany(actor, r.PathValue("path"))
+		if err != nil {
+			return
+		}
+		if pages[0].Rev != rev {
+			message := `This page changed after you opened it. <a href="` + template.HTMLEscapeString(jikko.DefaultLinks.Page(pages[0].Path)) + `">Reload</a> to see the current version.`
+			if editing {
+				message = "This page changed after you opened the editor. Saving merges your edit with that change, or shows you what conflicts."
+			}
+			fmt.Fprintf(w, "data: %s\n\n", sseData(`<div id="jk-live" class="alert jk-flash" role="status"><section><p>`+message+`</p></section></div>`))
+			flusher.Flush()
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-expiry:
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // inlineTypes are served for display; anything else is a download.

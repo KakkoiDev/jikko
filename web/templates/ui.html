@@ -30,6 +30,7 @@
 
 {{define "detail"}}{{with .Detail}}<section id="page" class="jk-page" data-path="{{.Path}}" data-rev="{{.Rev}}">
 {{template "flash" $}}
+<div id="jk-live" hx-sse:connect="{{liveURL .Path .Rev "view"}}" hx-swap="outerHTML"></div>
 <header class="jk-page-head">
 <div><p class="jk-muted">{{.Kind}} · {{.Path}}</p><h2 class="jk-title">{{.Title}}</h2></div>
 {{if .CanWrite}}<nav class="jk-actions"><a class="btn" href="{{editURL .Path}}">Edit</a> <a class="btn" data-variant="outline" href="{{editURL .Path}}?mode=source">Edit source</a></nav>{{end}}
@@ -73,6 +74,7 @@
 <nav class="jk-actions"><a class="btn" data-variant="{{if eq .Mode "source"}}outline{{else}}primary{{end}}" href="{{editURL .Path}}">Fields &amp; body</a> <a class="btn" data-variant="{{if eq .Mode "source"}}primary{{else}}outline{{end}}" href="{{editURL .Path}}?mode=source">Source</a> <a class="btn" data-variant="ghost" href="{{pageURL .Path}}">Cancel</a></nav>
 </header>
 {{if .Error}}<div class="alert" data-variant="destructive" role="alert"><section><p>{{.Error}}</p></section></div>{{end}}
+{{if not .Conflict}}<div id="jk-live" hx-sse:connect="{{liveURL .Path .Rev "edit"}}" hx-swap="outerHTML"></div>{{end}}
 {{if .Conflict}}{{template "conflict" $}}{{end}}
 <form method="post" action="{{saveURL .Path}}" hx-post="{{saveURL .Path}}" hx-target="#page" hx-swap="outerHTML" class="jk-stack jk-edit">
 <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="mode" value="{{.Mode}}"><input type="hidden" name="rev" value="{{.Rev}}"><input type="hidden" name="base" value="{{.Base}}">

@@ -254,6 +254,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /save/{path...}", s.savePage)
 	mux.HandleFunc("POST /comment/{path...}", s.commentPage)
 	mux.HandleFunc("POST /upload/{path...}", s.uploadFile)
+	mux.HandleFunc("GET /events/page/{path...}", s.pageEvents)
 	mux.HandleFunc("GET /files/{path...}", s.serveFile)
 	mux.HandleFunc("/", s.index)
 	return securityHeaders(mux)
@@ -473,18 +474,20 @@ func sameOrigin(r *http.Request) bool {
 	return err == nil && u.Host == r.Host
 }
 
-func (s *server) events(w http.ResponseWriter, r *http.Request) {
+// openStream starts a server-sent event stream within the connection limit.
+// It returns the flusher and a release function, or answers the request
+// itself and returns false.
+func (s *server) openStream(w http.ResponseWriter) (http.Flusher, func(), bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
+		return nil, nil, false
 	}
 	select {
 	case s.streams <- struct{}{}:
-		defer func() { <-s.streams }()
 	default:
 		http.Error(w, "too many live connections", http.StatusServiceUnavailable)
-		return
+		return nil, nil, false
 	}
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
@@ -493,6 +496,15 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
+	return flusher, func() { <-s.streams }, true
+}
+
+func (s *server) events(w http.ResponseWriter, r *http.Request) {
+	flusher, release, ok := s.openStream(w)
+	if !ok {
+		return
+	}
+	defer release()
 
 	// A stream never extends the session it runs under, and it closes as soon
 	// as the caller it started for is no longer who the request authenticates
