@@ -14,8 +14,8 @@ import (
 // one thread per id.
 const ProblemComment = "comment"
 
-// CommentThread is one unresolved inline comment and its messages. Comments live in the Markdown they
-// discuss (specification §8):
+// CommentThread is one unresolved inline comment and its messages. Comments
+// live in the Markdown they discuss (specification §8):
 //
 //	The harness should <!--comment:c17-->automatically update references<!--/comment:c17-->
 //	when a file is renamed.

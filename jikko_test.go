@@ -387,3 +387,39 @@ func TestNonMappingFrontmatterReported(t *testing.T) {
 		t.Fatalf("problems = %#v", w.Problems)
 	}
 }
+
+// Embeds are file-oriented (specification §5.2): an asset that exists is a
+// resolved reference, found by path from the root or the page's folder, or by
+// a bare name that matches one file.
+func TestAssetReferencesResolve(t *testing.T) {
+	d := t.TempDir()
+	write(t, d, "notes/page.md", "# Page\n![[diagram.png]] ![[notes/local.pdf]] ![[local.pdf]] [[media/demo.mp4]] ![[missing.png]] ![[dup.png]] [[missing-page]] ![[secret.png]]\n")
+	for _, name := range []string{"assets/diagram.png", "notes/local.pdf", "media/demo.mp4", "a/dup.png", "b/dup.png", ".git/secret.png"} {
+		write(t, d, name, "x")
+	}
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := w.UnresolvedReferences()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msgs []string
+	for _, p := range got {
+		msgs = append(msgs, p.Message)
+	}
+	want := []string{`unresolved "missing-page"`, `unresolved "missing.png"`, `ambiguous "dup.png"; give its path`, `unresolved "secret.png"`}
+	if len(msgs) != len(want) {
+		t.Fatalf("problems = %q, want %q", msgs, want)
+	}
+	for _, m := range want {
+		found := false
+		for _, g := range msgs {
+			found = found || g == m
+		}
+		if !found {
+			t.Fatalf("problems = %q, missing %q", msgs, m)
+		}
+	}
+}

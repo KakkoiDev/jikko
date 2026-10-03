@@ -389,14 +389,11 @@ func check(args []string) error {
 	if err != nil {
 		return err
 	}
-	problems := append([]jikko.Problem(nil), w.Problems...)
-	for _, p := range w.List("", "") {
-		for _, ref := range append(append([]string{}, p.Links...), p.Embeds...) {
-			if _, ok := w.Resolve(ref); !ok {
-				problems = append(problems, jikko.Problem{Path: p.Path, Kind: "reference", Message: fmt.Sprintf("unresolved %q", ref)})
-			}
-		}
+	unresolved, err := w.UnresolvedReferences()
+	if err != nil {
+		return err
 	}
+	problems := append(append([]jikko.Problem(nil), w.Problems...), unresolved...)
 	warnings := w.UnresolvedCommentWarnings()
 	if warnings == nil {
 		warnings = []jikko.Problem{}
