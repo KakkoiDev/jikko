@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -168,6 +169,8 @@ type server struct {
 	streams    chan struct{}
 	// csrfKey signs the anti-forgery tokens of this process's forms.
 	csrfKey []byte
+	// maxUpload is the maximum size of an uploaded file.
+	maxUpload int64
 }
 
 // pageData is what every template renders. Only the fields of the page being
@@ -186,10 +189,11 @@ type pageData struct {
 }
 
 func serve(args []string) error {
-	var addr *string
+	var addr, maxUpload *string
 	var trustProxy *bool
 	args, dir, _, err := flags("serve", args, func(f *flag.FlagSet) {
 		addr = f.String("addr", "127.0.0.1:8080", "listen address")
+		maxUpload = f.String("max-upload", os.Getenv("JIKKO_MAX_UPLOAD"), "maximum upload size, such as 25M (or JIKKO_MAX_UPLOAD)")
 		trustProxy = f.Bool("behind-proxy", false, "trust X-Forwarded-Proto from a reverse proxy when setting cookie Secure")
 	})
 	if err != nil {
@@ -203,7 +207,12 @@ func serve(args []string) error {
 		return err
 	}
 
+	limit, err := parseSize(*maxUpload)
+	if err != nil {
+		return err
+	}
 	s := newServer(root, *trustProxy)
+	s.maxUpload = limit
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           s.routes(),
@@ -229,6 +238,7 @@ func newServer(root string, trustProxy bool) *server {
 		trustProxy: trustProxy,
 		streams:    make(chan struct{}, maxStreams),
 		csrfKey:    key,
+		maxUpload:  jikko.DefaultMaxUpload,
 	}
 }
 
@@ -243,6 +253,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /edit/{path...}", s.editPage)
 	mux.HandleFunc("POST /save/{path...}", s.savePage)
 	mux.HandleFunc("POST /comment/{path...}", s.commentPage)
+	mux.HandleFunc("POST /upload/{path...}", s.uploadFile)
 	mux.HandleFunc("GET /files/{path...}", s.serveFile)
 	mux.HandleFunc("/", s.index)
 	return securityHeaders(mux)

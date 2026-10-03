@@ -142,6 +142,14 @@ the file and lists what breaks. `delete` refuses to drop an identity that a
 group or an access policy names unless `--prune` removes those entries, and
 reports links it leaves dangling.
 
+Files are uploaded through the same operation from the CLI and the browser,
+up to a configurable maximum size (25 MiB by default):
+
+```sh
+go run ./cmd/jikko upload ./diagram.png --into architecture --dir /path/to/workspace
+go run ./cmd/jikko upload ./recording.mp4 --as media/demo.mp4 --max-upload 50M --dir /path/to/workspace
+```
+
 Whole-page edits carry the revision they were based on. When the page changed
 meanwhile, Jikko merges the two edits three ways -- frontmatter key by key, the
 body line by line -- using the base revision you send or finds in Git history,
@@ -179,7 +187,7 @@ jikko export --dir /path/to/workspace --output workspace.zip
 
 The ZIP contains source and assets but deliberately excludes Git internals, derived `.data`, and credentials in `.auth.md`. The browser API can produce/download the same ZIP. See [browser/README.md](browser/README.md).
 
-> **Current limitation:** uploads, Mermaid diagram rendering (source is shown), live in-place editing of embedded pages, automatic Git commits, and server-sent refresh of an open page are roadmap work.
+> **Current limitation:** upload progress, drag and drop, and paste; Mermaid diagram rendering (source is shown), live in-place editing of embedded pages, automatic Git commits, and server-sent refresh of an open page are roadmap work.
 
 ## Agent workspace operations
 

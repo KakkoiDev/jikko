@@ -716,3 +716,44 @@ func TestShowRawAndSave(t *testing.T) {
 		t.Fatal("a reader saved")
 	}
 }
+
+func TestUploadCommand(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	t.Setenv("JIKKO_MAX_UPLOAD", "")
+	src := filepath.Join(t.TempDir(), "chart.png")
+	if err := os.WriteFile(src, []byte("0123456789"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cli(t, upload, src, "--dir", dir); err == nil {
+		t.Fatal("anonymous upload accepted")
+	}
+	if _, _, err := cli(t, upload, src, "--into", "secret", "--dir", dir, "--token", bobToken); err == nil {
+		t.Fatal("a reader embedded into a page")
+	}
+	if _, _, err := cli(t, upload, src, "--max-upload", "9", "--dir", dir, "--token", aliceToken); err == nil || !strings.Contains(err.Error(), "maximum upload size is 9") {
+		t.Fatalf("limit: %v", err)
+	}
+	t.Setenv("JIKKO_MAX_UPLOAD", "5")
+	if _, _, err := cli(t, upload, src, "--dir", dir, "--token", aliceToken); err == nil {
+		t.Fatal("JIKKO_MAX_UPLOAD ignored")
+	}
+	t.Setenv("JIKKO_MAX_UPLOAD", "1K")
+	var res struct{ Path, Into, Embed string }
+	out := mustCLI(t, upload, src, "--into", "open", "--json", "--dir", dir, "--token", aliceToken)
+	if err := json.Unmarshal([]byte(out), &res); err != nil || res.Path != "chart.png" || res.Embed != "chart.png" || res.Into != "open.md" {
+		t.Fatalf("upload = %q (%v)", out, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "open.md")); !strings.HasSuffix(string(b), "\n\n![[chart.png]]\n") {
+		t.Fatalf("open.md = %q", b)
+	}
+	for in, want := range map[string]int64{"": 25 << 20, "100": 100, "2k": 2048, "25M": 25 << 20, "1GiB": 1 << 30, "3MB": 3 << 20} {
+		if got, err := parseSize(in); err != nil || got != want {
+			t.Errorf("parseSize(%q) = %d, %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"x", "-1", "0", "1T"} {
+		if _, err := parseSize(bad); err == nil {
+			t.Errorf("parseSize(%q) accepted", bad)
+		}
+	}
+}

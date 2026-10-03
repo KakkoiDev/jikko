@@ -397,6 +397,10 @@ jikko upload ./diagram.png --into architecture.md --json
 
 The reference harness MUST impose a configurable maximum upload size to avoid accidentally placing impractically large binary files into ordinary Git history. The initial limit should be chosen from testing rather than premature optimization.
 
+### 12.1 Reference harness reading
+
+`jikko upload <file> [--into <page>] [--as <path>]` and the browser's file picker on a page perform the same core operation. The file becomes an ordinary workspace file, by default named as uploaded and placed next to the page it is embedded into, or at the root. With a page, `![[file]]` is appended to its body as a paragraph of its own in the same staged operation, which needs `write` on the page; a bare name is used when nothing else answers to it, the path otherwise. Without a page, an authenticated individual may upload. An existing file is never overwritten, and Markdown pages, dotfiles, harness state, paths outside the workspace, and names containing `[`, `]`, or `|` are refused. The maximum upload size defaults to 25 MiB -- well under the 50 MB at which GitHub warns and the 100 MB at which it refuses a file -- and is configured with `--max-upload` or `JIKKO_MAX_UPLOAD` (for example `10M`), for `jikko upload` and `jikko serve` alike. Upload progress, drag and drop, paste, and `+` insertion are not implemented yet.
+
 **Open design question:** large binary asset storage. Git LFS or another local/remote large-file mechanism may eventually be useful, but it is deliberately not a v1 dependency. Any future design must consider local hosting, portability, deletion/garbage collection, and the complexity of introducing a second storage system.
 
 ## 13. Harness and derived data

@@ -59,6 +59,7 @@
 </form>{{else if not $.Actor}}<p class="jk-muted">Log in to take part.</p>{{end}}
 </aside>
 </div>{{end}}
+{{if and .CanWrite (not .View)}}<form method="post" action="{{uploadURL .Path}}" hx-post="{{uploadURL .Path}}" hx-target="#page" hx-swap="outerHTML" enctype="multipart/form-data" class="jk-row jk-upload"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><label class="label" for="jk-file">Attach a file</label><input class="input" id="jk-file" type="file" name="file" required><button class="btn" data-variant="outline">Upload and embed</button></form>{{end}}
 {{if .Backlinks}}<footer class="jk-backlinks"><h3>Linked from</h3><ul>{{range .Backlinks}}<li><a href="{{pageURL .Path}}">{{.Title}}</a></li>{{end}}</ul></footer>{{end}}
 </section>{{end}}{{end}}
 

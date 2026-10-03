@@ -21,6 +21,7 @@ Implemented in the Go core:
 - per-workspace serialization of mutations and credential changes within a process;
 - surgical frontmatter edits that preserve key order, comments, and YAML types;
 - a browser interface with page detail, fields and source editing against a revision, side-by-side conflict resolution, and comment add/reply/resolve, protected by anti-forgery tokens and a strict CSP, over a Markdown renderer that never passes raw HTML through (specification §16.1);
+- uploads with a configurable maximum size, embedded into a page in the same operation, from the CLI and the browser (specification §12.1);
 - three-way merge of stale edits with structured, per-key and per-region conflicts (`jikko save`, specification §11.1);
 - semantic rename that rewrites links, embeds, memberships, access policies, assignees, mentions, and work-model references in one staged operation, and deletion that refuses or explicitly prunes inbound membership and policy references (specification §7.1).
 

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"mime"
 	"net/http"
 	"os"
@@ -34,6 +35,7 @@ var templateFuncs = template.FuncMap{
 	"editURL":    func(p string) string { return "/edit/" + escapedPath(p) },
 	"saveURL":    func(p string) string { return "/save/" + escapedPath(p) },
 	"commentURL": func(p string) string { return "/comment/" + escapedPath(p) },
+	"uploadURL":  func(p string) string { return "/upload/" + escapedPath(p) },
 	"short": func(rev string) string {
 		if len(rev) > 12 {
 			return rev[:12]
@@ -359,7 +361,11 @@ func (s *server) editPage(w http.ResponseWriter, r *http.Request) {
 // request. The cached workspace is shared by concurrent readers and is never
 // mutated; the cache notices the change on disk and reloads.
 func (s *server) mutationContext(w http.ResponseWriter, r *http.Request) (*jikko.Workspace, string, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
+	return s.mutationContextLimit(w, r, maxFormBody)
+}
+
+func (s *server) mutationContextLimit(w http.ResponseWriter, r *http.Request, limit int64) (*jikko.Workspace, string, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	if !s.postAllowed(w, r) {
 		return nil, "", false
 	}
@@ -573,6 +579,51 @@ func (s *server) commentPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.done(w, r, ws, actor, p.Path, flash)
+}
+
+// uploadFile adds a file to the workspace and embeds it into the page, the
+// same core operation as `jikko upload --into`.
+func (s *server) uploadFile(w http.ResponseWriter, r *http.Request) {
+	// Leave room for the multipart framing and the form's other fields.
+	ws, actor, ok := s.mutationContextLimit(w, r, s.maxUpload+maxFormBody)
+	if !ok {
+		return
+	}
+	pages, err := ws.ReadMany(actor, r.PathValue("path"))
+	if err != nil {
+		s.refuse(w, r, http.StatusNotFound, actor, msgNotFound)
+		return
+	}
+	p := pages[0]
+	if !ws.Allowed(actor, p, jikko.Write) {
+		s.refuse(w, r, http.StatusForbidden, actor, "You may read this page but not change it.")
+		return
+	}
+	status, message := http.StatusOK, ""
+	file, header, err := r.FormFile("file")
+	var res *jikko.UploadResult
+	if err != nil {
+		status, message = http.StatusBadRequest, "Choose a file to upload."
+	} else {
+		defer file.Close()
+		data, readErr := io.ReadAll(io.LimitReader(file, s.maxUpload+1))
+		switch {
+		case readErr != nil:
+			status, message = http.StatusBadRequest, "The upload could not be read."
+		case int64(len(data)) > s.maxUpload:
+			status, message = http.StatusRequestEntityTooLarge, fmt.Sprintf("%s is larger than the maximum upload size of %d bytes.", header.Filename, s.maxUpload)
+		default:
+			res, err = ws.Upload(actor, header.Filename, data, jikko.UploadOptions{Into: p.Path, MaxBytes: s.maxUpload})
+			if err != nil {
+				status, message = http.StatusUnprocessableEntity, err.Error()
+			}
+		}
+	}
+	if message != "" {
+		s.respond(w, r, status, pageData{Actor: actor, CSRF: s.csrfFor(w, r), Error: message, Detail: s.detail(ws, actor, p)})
+		return
+	}
+	s.done(w, r, ws, actor, p.Path, fmt.Sprintf("Uploaded %s and embedded it at the end of the page.", res.Path))
 }
 
 // inlineTypes are served for display; anything else is a download.

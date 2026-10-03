@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	jikko "github.com/KakkoiDev/jikko"
@@ -18,7 +19,7 @@ var commands = map[string]func([]string) error{
 	"perm": perm, "serve": serve, "check": check,
 	"tree": tree, "mentions": mentions, "create": create, "commit": commit, "export": exportWorkspace,
 	"comment": comment, "rename": rename, "delete": deletePage,
-	"view": view, "save": save,
+	"view": view, "save": save, "upload": upload,
 }
 
 func main() {
@@ -50,6 +51,7 @@ func usage() {
   view    evaluate a view: filter, sort, and group readable pages
   mentions list pages addressing the authenticated identity
   create  create a Markdown document or task
+  upload  add a file to the workspace, optionally embedding it in a page
   commit  record changes with actor-attributed Git audit trailers
   export  export a portable workspace ZIP
   save    save an edited page, merging concurrent changes
@@ -815,4 +817,77 @@ func printConflict(c jikko.Conflict) {
 		fmt.Printf("  [%s] body at line %d:\n    base:%s\n    current:%s\n    yours:%s\n", b.ID, b.Line, indent(b.Base), indent(b.Current), indent(b.Yours))
 	}
 	fmt.Printf("  settle with: --against %s --resolve <id>=current|yours\n", c.CurrentRev)
+}
+
+func upload(args []string) error {
+	var asJSON *bool
+	var into, as, maxSize *string
+	args, dir, token, err := flags("upload", args, func(f *flag.FlagSet) {
+		asJSON = f.Bool("json", false, "JSON output")
+		into = f.String("into", "", "page to embed the file into")
+		as = f.String("as", "", "destination path in the workspace (default: the file's name next to --into, or at the root)")
+		maxSize = f.String("max-upload", os.Getenv("JIKKO_MAX_UPLOAD"), "maximum upload size, such as 25M (or JIKKO_MAX_UPLOAD)")
+	})
+	if err != nil {
+		return err
+	}
+	if len(args) != 1 {
+		return errors.New("usage: jikko upload [flags] <file> [--into <page>] [--as <path>]")
+	}
+	limit, err := parseSize(*maxSize)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(args[0])
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", args[0])
+	}
+	if info.Size() > limit {
+		return fmt.Errorf("%s is %d bytes; the maximum upload size is %d bytes", args[0], info.Size(), limit)
+	}
+	data, err := os.ReadFile(args[0])
+	if err != nil {
+		return err
+	}
+	w, actor, err := authenticated(*dir, *token)
+	if err != nil {
+		return err
+	}
+	res, err := w.Upload(actor, args[0], data, jikko.UploadOptions{Path: *as, Into: *into, MaxBytes: limit})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(res)
+	}
+	if res.Into != "" {
+		fmt.Printf("uploaded %s (%d bytes) and embedded ![[%s]] in %s\n", res.Path, res.Size, res.Embed, res.Into)
+	} else {
+		fmt.Printf("uploaded %s (%d bytes)\n", res.Path, res.Size)
+	}
+	return nil
+}
+
+// parseSize reads a byte count such as 1048576, 512K, 25M, or 1G (binary
+// multiples). Empty means the default maximum upload size.
+func parseSize(s string) (int64, error) {
+	s = strings.TrimSpace(strings.ToUpper(s))
+	if s == "" {
+		return jikko.DefaultMaxUpload, nil
+	}
+	mult := int64(1)
+	for suffix, m := range map[string]int64{"K": 1 << 10, "M": 1 << 20, "G": 1 << 30} {
+		if trimmed, ok := strings.CutSuffix(strings.TrimSuffix(strings.TrimSuffix(s, "B"), "I"), suffix); ok {
+			s, mult = trimmed, m
+			break
+		}
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("invalid size %q: use a byte count such as 26214400 or 25M", s)
+	}
+	return n * mult, nil
 }

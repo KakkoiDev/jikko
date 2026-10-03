@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"html"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -493,5 +495,82 @@ func TestInterfacePagesNeedNoInlineCode(t *testing.T) {
 	}
 	if !strings.Contains(pages["conflict"], "jk-conflict") {
 		t.Fatal("conflict page not rendered")
+	}
+}
+
+// uploadForm posts a multipart upload as who, with a token unless noToken.
+func (u *uiTeam) upload(t *testing.T, who, target, name string, data []byte, noToken bool) *httptest.ResponseRecorder {
+	t.Helper()
+	var cookies []*http.Cookie
+	if c := u.cookies[who]; c != nil {
+		cookies = append(cookies, c)
+	}
+	token, cookies := formToken(t, u.h, cookies)
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if !noToken {
+		_ = mw.WriteField("_csrf", token)
+	}
+	if name != "" {
+		fw, err := mw.CreateFormFile("file", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = fw.Write(data)
+	}
+	mw.Close()
+	r := httptest.NewRequest(http.MethodPost, target, &body)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	for _, c := range cookies {
+		r.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	u.h.ServeHTTP(rec, r)
+	return rec
+}
+
+func TestUploadForm(t *testing.T) {
+	u := uiWorkspace(t)
+	before := u.read(t, "plan.md")
+	if rec := u.upload(t, "bob", "/upload/plan.md", "chart.png", []byte("png"), true); rec.Code != http.StatusForbidden {
+		t.Fatalf("upload without a token = %d", rec.Code)
+	}
+	for who, want := range map[string]int{"carol": 403, "dave": 403, "": 401} {
+		if rec := u.upload(t, who, "/upload/plan.md", "chart.png", []byte("png"), false); rec.Code != want {
+			t.Errorf("%q upload = %d, want %d", who, rec.Code, want)
+		}
+	}
+	if rec := u.upload(t, "bob", "/upload/plan.md", "", nil, false); rec.Code != http.StatusBadRequest {
+		t.Fatalf("upload without a file = %d", rec.Code)
+	}
+	u.s.maxUpload = 2
+	if rec := u.upload(t, "bob", "/upload/plan.md", "chart.png", []byte("png"), false); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized upload = %d", rec.Code)
+	}
+	if rec := u.upload(t, "bob", "/upload/plan.md", ".env", []byte("x"), false); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("dotfile upload = %d", rec.Code)
+	}
+	if u.read(t, "plan.md") != before {
+		t.Fatal("a refused upload changed the page")
+	}
+	if _, err := os.Stat(filepath.Join(u.dir, "chart.png")); !os.IsNotExist(err) {
+		t.Fatal("a refused upload wrote a file")
+	}
+	u.s.maxUpload = 1 << 20
+	if rec := u.upload(t, "bob", "/upload/plan.md", "chart.png", []byte("png"), false); rec.Code != http.StatusSeeOther {
+		t.Fatalf("upload = %d\n%s", rec.Code, rec.Body.String())
+	}
+	if got := u.read(t, "plan.md"); !strings.HasSuffix(got, "Then measure it.\n\n![[chart.png]]\n") {
+		t.Fatalf("plan.md = %q", got)
+	}
+	// The embedded file is now served to readers of plan.md only.
+	if rec := u.get(t, "dave", "/files/chart.png"); rec.Code != http.StatusOK {
+		t.Fatalf("reader fetch = %d", rec.Code)
+	}
+	if rec := u.get(t, "", "/files/chart.png"); rec.Code != http.StatusNotFound {
+		t.Fatalf("anonymous fetch = %d", rec.Code)
+	}
+	if !strings.Contains(u.get(t, "bob", "/p/plan.md").Body.String(), `enctype="multipart/form-data"`) || strings.Contains(u.get(t, "carol", "/p/plan.md").Body.String(), "Upload and embed") {
+		t.Fatal("upload form offered to the wrong callers")
 	}
 }
