@@ -20,6 +20,7 @@ Implemented in the Go core:
 - staged mutations: the proposed workspace is built in memory and judged before anything is written, so a rejected mutation never touches disk;
 - per-workspace serialization of mutations and credential changes within a process;
 - surgical frontmatter edits that preserve key order, comments, and YAML types;
+- three-way merge of stale edits with structured, per-key and per-region conflicts (`jikko save`, specification §11.1);
 - semantic rename that rewrites links, embeds, memberships, access policies, assignees, mentions, and work-model references in one staged operation, and deletion that refuses or explicitly prunes inbound membership and policy references (specification §7.1).
 
 `CanChangeMembers` remains the conservative pre-check it always was: changing a group that participates in ACLs requires effective `admin` on every affected file.

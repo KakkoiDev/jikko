@@ -136,6 +136,17 @@ the file and lists what breaks. `delete` refuses to drop an identity that a
 group or an access policy names unless `--prune` removes those entries, and
 reports links it leaves dangling.
 
+Whole-page edits carry the revision they were based on. When the page changed
+meanwhile, Jikko merges the two edits three ways -- frontmatter key by key, the
+body line by line -- using the base revision you send or finds in Git history,
+and returns a structured conflict instead of overwriting when they overlap:
+
+```sh
+go run ./cmd/jikko show plan --raw --dir /path/to/workspace > plan.md   # prints the rev on stderr
+cp plan.md plan.base.md && $EDITOR plan.md
+go run ./cmd/jikko save plan --rev <rev> --file plan.md --base plan.base.md --json --dir /path/to/workspace
+```
+
 `check` reports unresolved references together with workspace problems —
 malformed frontmatter, unknown types, views carrying a body or an unusable
 definition, broken work-model references, membership cycles,
@@ -162,7 +173,7 @@ jikko export --dir /path/to/workspace --output workspace.zip
 
 The ZIP contains source and assets but deliberately excludes Git internals, derived `.data`, and credentials in `.auth.md`. The browser API can produce/download the same ZIP. See [browser/README.md](browser/README.md).
 
-> **Current limitation:** the implementation can inspect, mutate, comment on, and serve a workspace, but the source-first browser editor, browser comment sidebar, automatic Git transaction/merge integration, uploads, media embeds, and Mermaid are roadmap work.
+> **Current limitation:** the implementation can inspect, mutate, comment on, and serve a workspace, but the source-first browser editor, browser comment sidebar, automatic Git commits, uploads, media embeds, and Mermaid are roadmap work.
 
 ## Agent workspace operations
 

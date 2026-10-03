@@ -374,6 +374,15 @@ Git should provide the mature three-way merge machinery where practical; Jikko p
 
 SSE may notify open browser sessions when a source file changes externally, reducing avoidable conflicting saves.
 
+### 11.1 Reference harness reading
+
+- **Revisions.** A page's revision is the SHA-256 of its exact bytes, exposed as `rev` by `jikko show --json` (and on stderr by `jikko show --raw`, which prints the exact source). `jikko save <reference> --rev <rev>` saves an edited source against the revision it was based on; the browser editor does the same.
+- **Finding the base.** When the page has changed since `rev`, the harness needs the base text. It uses, in order, a copy of the source as read that the caller sends with the edit (`--base`, or the browser form) and that is accepted only if its fingerprint is `rev`, then the page's Git history: the index and the last 200 commits that touched the file. A base found neither way means no three-way merge, as §10 anticipates for workspaces without Git: every difference from the current page is reported as a conflict, marked `base_known: false`.
+- **Merging.** Frontmatter merges per key: a key changed by one side takes that side's value (a deletion included), a key changed identically by both takes it once, and a key changed differently by both is a field conflict. The body merges per line with the diff3 rule: a region changed by one side takes that side, and a region changed differently by both, adjacent lines included, conflicts. The current page's frontmatter bytes are kept unless a key changes. Frontmatter that cannot be read as a mapping is merged as part of the text.
+- **Merge machinery.** §10 prefers Git's merge machinery. The reference harness takes the base from Git but performs the diff3 merge itself, in the Go core, because the browser runtime has no Git process and the specification asks for enforcement that is deterministic and identical for browser and machine interfaces (§2.1). The algorithm is the standard diff3 rule over a longest-common-subsequence line match, not a new one; for very large changed regions the match is skipped, which can only turn a merge into a conflict.
+- **Results.** A clean merge is saved like any other edit, staged and authorized, and is reported as `merged`; recording it in Git remains `jikko commit`. A conflict writes nothing and returns, as JSON, the path, both revisions, whether the base was known, each conflicting key with its base, current, and yours values (YAML text, `null` when absent), and each conflicting body region with the line where it starts in the current body. Raw conflict markers are never written. Changing `permissions` in an edit needs `admin`.
+- **Line endings.** An edit is converted to the line endings of the current file, since browsers submit text with CRLF.
+
 ## 12. Uploads and asset size
 
 Uploads are ordinary workspace files and, by default, participate in Git history. Browser upload entry points include drag/drop, clipboard paste, `+` insertion, and accessible file picker. Show real byte progress when available and an indeterminate state otherwise.

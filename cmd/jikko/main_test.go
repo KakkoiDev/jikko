@@ -636,3 +636,74 @@ func TestCheckReportsWorkModel(t *testing.T) {
 		t.Fatalf("check:\n%s", out)
 	}
 }
+
+func TestShowRawAndSave(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	src, errOut, err := cli(t, show, "open", "--raw", "--dir", dir)
+	if err != nil || src != "# Open\n\nSee [[tasks/ship]]. @crew please look.\n" {
+		t.Fatalf("raw = %q (%v)", src, err)
+	}
+	rev := strings.TrimSpace(errOut[strings.LastIndex(errOut, " ")+1:])
+	var page struct{ Rev string }
+	if err := json.Unmarshal([]byte(mustCLI(t, show, "open", "--json", "--dir", dir)), &page); err != nil || page.Rev != rev {
+		t.Fatalf("show --json rev %q, raw rev %q", page.Rev, rev)
+	}
+	if _, _, err := cli(t, show, "open", "secret", "--raw", "--dir", dir); err == nil {
+		t.Fatal("--raw accepted two pages")
+	}
+	if _, _, err := cli(t, show, "secret", "--raw", "--dir", dir); err == nil {
+		t.Fatal("anonymous caller read restricted source")
+	}
+
+	scratch := t.TempDir()
+	put := func(name, content string) string {
+		p := filepath.Join(scratch, name)
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	base := put("base.md", src)
+	yours := put("yours.md", strings.Replace(src, "# Open", "# Open work", 1))
+	if _, _, err := cli(t, save, "open", "--rev", rev, "--file", yours, "--dir", dir); err == nil {
+		t.Fatal("anonymous save accepted")
+	}
+	// Someone else changes the last line meanwhile.
+	theirs := strings.Replace(src, "please look.", "please look today.", 1)
+	if err := os.WriteFile(filepath.Join(dir, "open.md"), []byte(theirs), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Without a base the change cannot be merged: a structured conflict.
+	out, _, err := cli(t, save, "open", "--rev", rev, "--file", yours, "--json", "--dir", dir, "--token", bobToken)
+	var conflict struct {
+		Conflict struct {
+			Path      string `json:"path"`
+			BaseKnown bool   `json:"base_known"`
+			Body      []struct{ Line int }
+		}
+	}
+	if err == nil || json.Unmarshal([]byte(out), &conflict) != nil || conflict.Conflict.Path != "open.md" || conflict.Conflict.BaseKnown {
+		t.Fatalf("conflict: %v %s", err, out)
+	}
+	out = mustCLI(t, save, "open", "--rev", rev, "--file", yours, "--base", base, "--dir", dir, "--token", bobToken)
+	if !strings.HasPrefix(out, "merged open.md rev ") {
+		t.Fatalf("save output %q", out)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "open.md"))
+	if string(b) != "# Open work\n\nSee [[tasks/ship]]. @crew please look today.\n" {
+		t.Fatalf("open.md = %q", b)
+	}
+	// A conflicting edit prints the regions and fails.
+	newRev := strings.TrimSpace(strings.TrimPrefix(out, "merged open.md rev "))
+	if err := os.WriteFile(filepath.Join(dir, "open.md"), []byte("# Open work, theirs\n\nSee [[tasks/ship]]. @crew please look today.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mine := put("mine.md", "# Open work, mine\n\nSee [[tasks/ship]]. @crew please look today.\n")
+	out, _, err = cli(t, save, "open", "--rev", newRev, "--file", mine, "--base", put("b2.md", string(b)), "--dir", dir, "--token", aliceToken)
+	if err == nil || !strings.Contains(out, "body at line 1:") || !strings.Contains(out, "current:\n      # Open work, theirs") {
+		t.Fatalf("conflict output %v:\n%s", err, out)
+	}
+	if _, _, err := cli(t, save, "secret", "--rev", rev, "--file", mine, "--dir", dir, "--token", bobToken); err == nil {
+		t.Fatal("a reader saved")
+	}
+}

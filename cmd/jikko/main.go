@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -17,7 +18,7 @@ var commands = map[string]func([]string) error{
 	"perm": perm, "serve": serve, "check": check,
 	"tree": tree, "mentions": mentions, "create": create, "commit": commit, "export": exportWorkspace,
 	"comment": comment, "rename": rename, "delete": deletePage,
-	"view": view,
+	"view": view, "save": save,
 }
 
 func main() {
@@ -51,6 +52,7 @@ func usage() {
   create  create a Markdown document or task
   commit  record changes with actor-attributed Git audit trailers
   export  export a portable workspace ZIP
+  save    save an edited page, merging concurrent changes
   set     set a metadata property
   perm    grant or clear a capability on a page
   rename  move a page and rewrite every reference to it
@@ -169,13 +171,16 @@ func list(args []string) error {
 }
 
 func show(args []string) error {
-	var asJSON *bool
-	args, dir, token, err := flags("show", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
+	var asJSON, raw *bool
+	args, dir, token, err := flags("show", args, func(f *flag.FlagSet) {
+		asJSON = f.Bool("json", false, "JSON output")
+		raw = f.Bool("raw", false, "print one page's exact source, for editing and `jikko save`")
+	})
 	if err != nil {
 		return err
 	}
-	if len(args) < 1 {
-		return errors.New("usage: jikko show [flags] <reference> [reference...]")
+	if len(args) < 1 || (*raw && (len(args) != 1 || *asJSON)) {
+		return errors.New("usage: jikko show [flags] <reference> [reference...]\n       jikko show --raw <reference>")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
@@ -183,6 +188,15 @@ func show(args []string) error {
 	}
 	actor, err := actorFor(w, *token)
 	if err != nil {
+		return err
+	}
+	if *raw {
+		src, p, err := w.Source(actor, args[0])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "jikko: %s rev %s\n", p.Path, p.Rev)
+		_, err = os.Stdout.Write(src)
 		return err
 	}
 	pages, err := w.ReadMany(actor, args...)
@@ -704,4 +718,87 @@ func view(args []string) error {
 		printItems("  ", g.Pages)
 	}
 	return nil
+}
+
+func save(args []string) error {
+	var asJSON *bool
+	var rev, file, base *string
+	args, dir, token, err := flags("save", args, func(f *flag.FlagSet) {
+		asJSON = f.Bool("json", false, "JSON output, including a structured conflict")
+		rev = f.String("rev", "", "revision the edit was based on (from show --json or show --raw)")
+		file = f.String("file", "-", "edited source, or - for standard input")
+		base = f.String("base", "", "the source as originally read, so a concurrent change can be merged without Git history")
+	})
+	if err != nil {
+		return err
+	}
+	if len(args) != 1 {
+		return errors.New("usage: jikko save [flags] <reference> --rev <rev> [--file <path>|-] [--base <path>]")
+	}
+	readInput := func(name string) ([]byte, error) {
+		if name == "-" {
+			return io.ReadAll(os.Stdin)
+		}
+		return os.ReadFile(name)
+	}
+	yours, err := readInput(*file)
+	if err != nil {
+		return err
+	}
+	var opt jikko.SaveOptions
+	if *base != "" {
+		if opt.Base, err = readInput(*base); err != nil {
+			return err
+		}
+	}
+	w, actor, err := authenticated(*dir, *token)
+	if err != nil {
+		return err
+	}
+	res, err := w.SaveSource(actor, args[0], *rev, yours, opt)
+	var conflict *jikko.ConflictError
+	if errors.As(err, &conflict) {
+		if *asJSON {
+			if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"conflict": conflict.Conflict}); err != nil {
+				return err
+			}
+		} else {
+			printConflict(conflict.Conflict)
+		}
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(res)
+	}
+	verb := "saved"
+	if res.Merged {
+		verb = "merged"
+	}
+	fmt.Printf("%s %s rev %s\n", verb, res.Path, res.Rev)
+	return nil
+}
+
+func printConflict(c jikko.Conflict) {
+	fmt.Printf("conflict in %s: base %s, current %s\n", c.Path, c.BaseRev, c.CurrentRev)
+	if !c.BaseKnown {
+		fmt.Println("  the base revision was not found: pass --base with the source you edited, or commit with Git")
+	}
+	value := func(v *string) string {
+		if v == nil {
+			return "(absent)"
+		}
+		return *v
+	}
+	for _, f := range c.Fields {
+		fmt.Printf("  field %s: base %s, current %s, yours %s\n", f.Key, value(f.Base), value(f.Current), value(f.Yours))
+	}
+	indent := func(s string) string {
+		return strings.TrimSuffix(strings.ReplaceAll("\n"+s, "\n", "\n      "), "\n      ")
+	}
+	for _, b := range c.Body {
+		fmt.Printf("  body at line %d:\n    base:%s\n    current:%s\n    yours:%s\n", b.Line, indent(b.Base), indent(b.Current), indent(b.Yours))
+	}
 }

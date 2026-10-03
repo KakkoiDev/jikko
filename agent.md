@@ -150,7 +150,7 @@ Rename and delete through Jikko (`jikko rename`, `jikko delete`), never with `mv
 
 ## Concurrency
 
-Use optimistic revision checks. If source changed after read, use a three-way merge where clean; otherwise return a structured conflict. Do not blindly overwrite another actor's edit. Do not add CRDT/OT infrastructure without demonstrated need.
+Use optimistic revision checks. If source changed after read, use a three-way merge where clean; otherwise return a structured conflict. For a whole-page edit, read with `jikko show <page> --raw` (the rev is printed on stderr, or use `show --json`), keep the original as the base, and write back with `jikko save <page> --rev <rev> --file edited.md --base original.md --json`. On a conflict, nothing is written: re-read, reconcile the listed fields and regions, and save again against the new rev. Do not blindly overwrite another actor's edit. Do not add CRDT/OT infrastructure without demonstrated need.
 
 ## Browser rules
 
