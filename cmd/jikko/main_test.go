@@ -700,8 +700,17 @@ func TestShowRawAndSave(t *testing.T) {
 	}
 	mine := put("mine.md", "# Open work, mine\n\nSee [[tasks/ship]]. @crew please look today.\n")
 	out, _, err = cli(t, save, "open", "--rev", newRev, "--file", mine, "--base", put("b2.md", string(b)), "--dir", dir, "--token", aliceToken)
-	if err == nil || !strings.Contains(out, "body at line 1:") || !strings.Contains(out, "current:\n      # Open work, theirs") {
+	if err == nil || !strings.Contains(out, "[body:0] body at line 1:") || !strings.Contains(out, "current:\n      # Open work, theirs") {
 		t.Fatalf("conflict output %v:\n%s", err, out)
+	}
+	current := out[strings.Index(out, "--against ")+len("--against "):]
+	current = current[:strings.Index(current, " ")]
+	if _, _, err := cli(t, save, "open", "--rev", newRev, "--file", mine, "--resolve", "body:0=mine", "--against", current, "--dir", dir, "--token", aliceToken); err == nil {
+		t.Fatal("a bad resolution side was accepted")
+	}
+	out = mustCLI(t, save, "open", "--rev", newRev, "--file", mine, "--base", filepath.Join(scratch, "b2.md"), "--resolve", "body:0=yours", "--against", current, "--dir", dir, "--token", aliceToken)
+	if b, _ := os.ReadFile(filepath.Join(dir, "open.md")); !strings.HasPrefix(out, "merged") || !strings.HasPrefix(string(b), "# Open work, mine\n") {
+		t.Fatalf("resolution: %s %q", out, b)
 	}
 	if _, _, err := cli(t, save, "secret", "--rev", rev, "--file", mine, "--dir", dir, "--token", bobToken); err == nil {
 		t.Fatal("a reader saved")

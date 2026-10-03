@@ -31,7 +31,7 @@ func TestMergeLines(t *testing.T) {
 		{"final newline against last line", "a\nb\nc\nd\ne\nf", "a\nb\nc\nd\ne\nF\n", "", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, conflicts := mergeLines(base, tc.current, tc.yours)
+			got, conflicts := mergeLines(base, tc.current, tc.yours, nil)
 			if len(conflicts) != tc.conflicts {
 				t.Fatalf("conflicts = %+v", conflicts)
 			}
@@ -43,12 +43,12 @@ func TestMergeLines(t *testing.T) {
 }
 
 func TestMergeLinesConflictShape(t *testing.T) {
-	_, conflicts := mergeLines("one\ntwo\nthree\n", "one\nTWO (current)\nthree\n", "one\nTWO (yours)\nthree\n")
+	_, conflicts := mergeLines("one\ntwo\nthree\n", "one\nTWO (current)\nthree\n", "one\nTWO (yours)\nthree\n", nil)
 	if len(conflicts) != 1 {
 		t.Fatalf("conflicts = %+v", conflicts)
 	}
 	c := conflicts[0]
-	if c.Line != 2 || c.Base != "two\n" || c.Current != "TWO (current)\n" || c.Yours != "TWO (yours)\n" {
+	if c.ID != "body:0" || c.Line != 2 || c.Base != "two\n" || c.Current != "TWO (current)\n" || c.Yours != "TWO (yours)\n" {
 		t.Fatalf("conflict = %+v", c)
 	}
 }
@@ -68,7 +68,7 @@ func TestMergeLinesProperty(t *testing.T) {
 		yours := editRegion(rng, base, split+1, n, "y")
 		// The expected text applies both region edits to the base.
 		want := append(append(append([]string{}, current[:len(current)-(n-(split-1))]...), base[split-1:split+1]...), yours[split+1:]...)
-		got, conflicts := mergeLines(join(base), join(current), join(yours))
+		got, conflicts := mergeLines(join(base), join(current), join(yours), nil)
 		if len(conflicts) != 0 || got != join(want) {
 			t.Fatalf("round %d: conflicts %+v\nbase %q\ncurrent %q\nyours %q\ngot %q\nwant %q", round, conflicts, join(base), join(current), join(yours), got, join(want))
 		}
@@ -98,7 +98,7 @@ func TestMergeFrontmatterPerKey(t *testing.T) {
 	t.Run("different keys", func(t *testing.T) {
 		current := "---\ntype: task\n# the status\nstatus: doing\ndue: 2026-09-20\ntags: [a]\n---\n# Task\n\nBody.\n"
 		yours := "---\ntype: task\n# the status\nstatus: todo\ndue: 2026-10-01\ntags: [a]\nassignee: alice\n---\n# Task\n\nBody, edited.\n"
-		merged, conflict, err := merge3([]byte(base), []byte(current), []byte(yours))
+		merged, conflict, err := merge3([]byte(base), []byte(current), []byte(yours), nil)
 		if err != nil || conflict != nil {
 			t.Fatalf("%v %+v", err, conflict)
 		}
@@ -110,7 +110,7 @@ func TestMergeFrontmatterPerKey(t *testing.T) {
 	t.Run("current frontmatter kept byte for byte", func(t *testing.T) {
 		current := "---\ntype:    task   # odd spacing\n# the status\nstatus: todo\ndue: 2026-09-20\ntags: [a]\n---\n# Task\n\nBody.\n"
 		yours := base[:strings.Index(base, "Body.")] + "Body, edited.\n"
-		merged, conflict, err := merge3([]byte(base), []byte(current), []byte(yours))
+		merged, conflict, err := merge3([]byte(base), []byte(current), []byte(yours), nil)
 		if err != nil || conflict != nil {
 			t.Fatalf("%v %+v", err, conflict)
 		}
@@ -121,7 +121,7 @@ func TestMergeFrontmatterPerKey(t *testing.T) {
 	t.Run("same key differently", func(t *testing.T) {
 		current := strings.Replace(base, "status: todo", "status: doing", 1)
 		yours := strings.Replace(strings.Replace(base, "status: todo", "status: done", 1), "tags: [a]", "tags: [a, b]", 1)
-		_, conflict, err := merge3([]byte(base), []byte(current), []byte(yours))
+		_, conflict, err := merge3([]byte(base), []byte(current), []byte(yours), nil)
 		if err != nil || conflict == nil || len(conflict.Fields) != 1 || len(conflict.Body) != 0 {
 			t.Fatalf("%v %+v", err, conflict)
 		}
@@ -133,7 +133,7 @@ func TestMergeFrontmatterPerKey(t *testing.T) {
 	t.Run("deleted against changed", func(t *testing.T) {
 		current := strings.Replace(base, "due: 2026-09-20\n", "", 1)
 		yours := strings.Replace(base, "due: 2026-09-20", "due: 2026-12-01", 1)
-		_, conflict, _ := merge3([]byte(base), []byte(current), []byte(yours))
+		_, conflict, _ := merge3([]byte(base), []byte(current), []byte(yours), nil)
 		if conflict == nil || len(conflict.Fields) != 1 || conflict.Fields[0].Current != nil || *conflict.Fields[0].Yours != "2026-12-01" {
 			t.Fatalf("conflict = %+v", conflict)
 		}
@@ -141,7 +141,7 @@ func TestMergeFrontmatterPerKey(t *testing.T) {
 	t.Run("deleted by yours", func(t *testing.T) {
 		current := strings.Replace(base, "Body.", "Body!", 1)
 		yours := strings.Replace(base, "tags: [a]\n", "", 1)
-		merged, conflict, err := merge3([]byte(base), []byte(current), []byte(yours))
+		merged, conflict, err := merge3([]byte(base), []byte(current), []byte(yours), nil)
 		if err != nil || conflict != nil || strings.Contains(string(merged), "tags") || !strings.Contains(string(merged), "Body!") {
 			t.Fatalf("%v %+v\n%s", err, conflict, merged)
 		}
@@ -149,7 +149,7 @@ func TestMergeFrontmatterPerKey(t *testing.T) {
 	t.Run("added identically", func(t *testing.T) {
 		current := strings.Replace(base, "tags: [a]", "tags: [a]\nowner: bob", 1)
 		yours := current
-		merged, conflict, err := merge3([]byte(base), []byte(current), []byte(yours))
+		merged, conflict, err := merge3([]byte(base), []byte(current), []byte(yours), nil)
 		if err != nil || conflict != nil || string(merged) != current {
 			t.Fatalf("%v %+v", err, conflict)
 		}
@@ -157,21 +157,21 @@ func TestMergeFrontmatterPerKey(t *testing.T) {
 	t.Run("added differently", func(t *testing.T) {
 		current := strings.Replace(base, "tags: [a]", "tags: [a]\nowner: bob", 1)
 		yours := strings.Replace(base, "tags: [a]", "tags: [a]\nowner: carol", 1)
-		_, conflict, _ := merge3([]byte(base), []byte(current), []byte(yours))
+		_, conflict, _ := merge3([]byte(base), []byte(current), []byte(yours), nil)
 		if conflict == nil || len(conflict.Fields) != 1 || conflict.Fields[0].Base != nil {
 			t.Fatalf("conflict = %+v", conflict)
 		}
 	})
 	t.Run("every key removed", func(t *testing.T) {
 		b := "---\nstatus: todo\n---\nBody\n"
-		merged, conflict, err := merge3([]byte(b), []byte("---\nstatus: todo\n---\nBody\nMore\n"), []byte("Body\n"))
+		merged, conflict, err := merge3([]byte(b), []byte("---\nstatus: todo\n---\nBody\nMore\n"), []byte("Body\n"), nil)
 		if err != nil || conflict != nil || string(merged) != "Body\nMore\n" {
 			t.Fatalf("%v %+v %q", err, conflict, merged)
 		}
 	})
 	t.Run("unreadable frontmatter merges as text", func(t *testing.T) {
 		b := "---\nstatus: [todo\n---\nline 1\nline 2\nline 3\n"
-		merged, conflict, err := merge3([]byte(b), []byte("---\nstatus: [todo\n---\nline one\nline 2\nline 3\n"), []byte("---\nstatus: [todo\n---\nline 1\nline 2\nline three\n"))
+		merged, conflict, err := merge3([]byte(b), []byte("---\nstatus: [todo\n---\nline one\nline 2\nline 3\n"), []byte("---\nstatus: [todo\n---\nline 1\nline 2\nline three\n"), nil)
 		if err != nil || conflict != nil || string(merged) != "---\nstatus: [todo\n---\nline one\nline 2\nline three\n" {
 			t.Fatalf("%v %+v %q", err, conflict, merged)
 		}
@@ -350,5 +350,36 @@ func TestSaveSourceKeepsLineEndings(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(d, "crlf.md"))
 	if string(b) != "---\r\nstatus: todo\r\n---\r\nOne\r\nThree\r\n" {
 		t.Fatalf("crlf.md = %q", b)
+	}
+}
+
+func TestSaveSourceResolvesConflicts(t *testing.T) {
+	d, w := saveWorkspace(t)
+	base, page, _ := w.Source("bob", "plan")
+	theirs := strings.Replace(strings.Replace(strings.Replace(string(base), "First.", "First, by alice.", 1), "Second.", "Second, by alice.", 1), "status: todo", "status: doing", 1)
+	writeTest(t, d, "plan.md", theirs)
+	yours := strings.Replace(strings.Replace(strings.Replace(string(base), "First.", "First, by bob.", 1), "Second.", "Second, by bob.", 1), "status: todo", "status: done", 1)
+	_, err := w.SaveSource("bob", "plan", page.Rev, []byte(yours), SaveOptions{Base: base})
+	var ce *ConflictError
+	if !errors.As(err, &ce) || len(ce.Conflict.Body) != 2 || ce.Conflict.Body[1].ID != "body:1" || ce.Conflict.Fields[0].ID != "field:status" {
+		t.Fatalf("err = %v %+v", err, ce)
+	}
+	choices := map[string]string{"body:0": TakeYours, "body:1": TakeCurrent, "field:status": TakeYours}
+	// Resolutions for an older state of the page are not applied.
+	if _, err := w.SaveSource("bob", "plan", page.Rev, []byte(yours), SaveOptions{Base: base, Resolve: choices, ResolveRev: page.Rev}); !errors.As(err, &ce) {
+		t.Fatalf("stale resolutions applied: %v", err)
+	}
+	// A partial resolution leaves the rest in conflict.
+	_, err = w.SaveSource("bob", "plan", page.Rev, []byte(yours), SaveOptions{Base: base, Resolve: map[string]string{"body:0": TakeYours}, ResolveRev: ce.Conflict.CurrentRev})
+	if !errors.As(err, &ce) || len(ce.Conflict.Body) != 1 || ce.Conflict.Body[0].ID != "body:1" || len(ce.Conflict.Fields) != 1 {
+		t.Fatalf("partial resolution: %v", err)
+	}
+	res, err := w.SaveSource("bob", "plan", page.Rev, []byte(yours), SaveOptions{Base: base, Resolve: choices, ResolveRev: ce.Conflict.CurrentRev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(strings.Replace(theirs, "First, by alice.", "First, by bob.", 1), "status: doing", "status: done", 1)
+	if !res.Merged || readFile(t, d, "plan.md") != want {
+		t.Fatalf("resolved:\n%s", readFile(t, d, "plan.md"))
 	}
 }

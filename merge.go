@@ -26,6 +26,8 @@ type Conflict struct {
 // FieldConflict is one frontmatter key changed differently by both sides.
 // Each value is its YAML text; nil means the key is absent on that side.
 type FieldConflict struct {
+	// ID names the conflict in a resolution: "field:<key>".
+	ID      string  `json:"id"`
 	Key     string  `json:"key"`
 	Base    *string `json:"base"`
 	Current *string `json:"current"`
@@ -35,6 +37,8 @@ type FieldConflict struct {
 // BodyConflict is one region of the body changed differently by both sides.
 // Line is where the region starts in the current body, counting from 1.
 type BodyConflict struct {
+	// ID names the conflict in a resolution: "body:<n>", counting from 0.
+	ID      string `json:"id"`
 	Line    int    `json:"line"`
 	Base    string `json:"base"`
 	Current string `json:"current"`
@@ -56,25 +60,33 @@ func short(rev string) string {
 	return rev
 }
 
+// Resolution sides.
+const (
+	TakeCurrent = "current"
+	TakeYours   = "yours"
+)
+
 // merge3 merges yours into current, both edits of base. It returns the
 // merged source, or the conflicts when the edits overlap. Frontmatter is
 // merged key by key and the body line by line. When the frontmatter of any
 // side cannot be read as a mapping, the whole source is merged as text.
-func merge3(base, current, yours []byte) ([]byte, *Conflict, error) {
+// resolve settles conflicts by id with TakeCurrent or TakeYours; a conflict
+// it does not settle is returned.
+func merge3(base, current, yours []byte, resolve map[string]string) ([]byte, *Conflict, error) {
 	b, bErr := splitSource(base)
 	c, cErr := splitSource(current)
 	y, yErr := splitSource(yours)
 	if bErr != nil || cErr != nil || yErr != nil {
-		merged, conflicts := mergeLines(string(base), string(current), string(yours))
+		merged, conflicts := mergeLines(string(base), string(current), string(yours), resolve)
 		if len(conflicts) > 0 {
 			return nil, &Conflict{Body: conflicts}, nil
 		}
 		return []byte(merged), nil, nil
 	}
 	conflict := &Conflict{}
-	fields, fieldConflicts := mergeFields(b, c, y)
+	fields, fieldConflicts := mergeFields(b, c, y, resolve)
 	conflict.Fields = fieldConflicts
-	body, bodyConflicts := mergeLines(b.body, c.body, y.body)
+	body, bodyConflicts := mergeLines(b.body, c.body, y.body, resolve)
 	conflict.Body = bodyConflicts
 	if len(conflict.Fields)+len(conflict.Body) > 0 {
 		return nil, conflict, nil
@@ -88,12 +100,12 @@ func conflict2(current, yours []byte) *Conflict {
 	c, cErr := splitSource(current)
 	y, yErr := splitSource(yours)
 	if cErr != nil || yErr != nil {
-		_, conflicts := mergeLines("", string(current), string(yours))
+		_, conflicts := mergeLines("", string(current), string(yours), nil)
 		return &Conflict{Body: conflicts}
 	}
 	empty := source{fields: map[string]string{}, nodes: map[string]*yaml.Node{}}
-	_, fields := mergeFields(empty, c, y)
-	_, body := mergeLines("", c.body, y.body)
+	_, fields := mergeFields(empty, c, y, nil)
+	_, body := mergeLines("", c.body, y.body, nil)
 	return &Conflict{Fields: fields, Body: body}
 }
 
@@ -167,7 +179,7 @@ type fieldChange struct {
 // mergeFields merges frontmatter key by key. A key changed by one side takes
 // that side's value; changed identically by both, it takes it once; changed
 // differently, it conflicts. It returns the changes to apply to current.
-func mergeFields(b, c, y source) ([]fieldChange, []FieldConflict) {
+func mergeFields(b, c, y source, resolve map[string]string) ([]fieldChange, []FieldConflict) {
 	var changes []fieldChange
 	var conflicts []FieldConflict
 	keys := append([]string(nil), c.order...)
@@ -195,10 +207,11 @@ func mergeFields(b, c, y source) ([]fieldChange, []FieldConflict) {
 		switch {
 		case same(yv, bv), same(cv, yv):
 			// Yours left it alone, or both agree: current stands.
-		case same(cv, bv):
+		case same(cv, bv), resolve["field:"+k] == TakeYours:
 			changes = append(changes, fieldChange{key: k, node: y.nodes[k]})
+		case resolve["field:"+k] == TakeCurrent:
 		default:
-			conflicts = append(conflicts, FieldConflict{Key: k, Base: bv, Current: cv, Yours: yv})
+			conflicts = append(conflicts, FieldConflict{ID: "field:" + k, Key: k, Base: bv, Current: cv, Yours: yv})
 		}
 	}
 	return changes, conflicts
@@ -264,12 +277,16 @@ func assemble(current []byte, c source, changes []fieldChange, body string) ([]b
 // both sides keep anchor the merge, a region changed by one side takes that
 // side, a region changed identically by both takes it once, and a region
 // changed differently by both is a conflict.
-func mergeLines(base, current, yours string) (string, []BodyConflict) {
+//
+// Conflicting regions are numbered from 0 in order; resolve settles region n
+// by its id "body:<n>".
+func mergeLines(base, current, yours string, resolve map[string]string) (string, []BodyConflict) {
 	bl, cl, yl := lines(base), lines(current), lines(yours)
 	mc := matchLines(bl, cl)
 	my := matchLines(bl, yl)
 	var out strings.Builder
 	var conflicts []BodyConflict
+	region := 0
 	i, c, y := 0, 0, 0
 	for {
 		for i < len(bl) && mc[i] == c && my[i] == y {
@@ -294,8 +311,17 @@ func mergeLines(base, current, yours string) (string, []BodyConflict) {
 		case cChunk == bChunk:
 			out.WriteString(yChunk)
 		default:
-			conflicts = append(conflicts, BodyConflict{Line: c + 1, Base: bChunk, Current: cChunk, Yours: yChunk})
-			out.WriteString(cChunk)
+			id := fmt.Sprintf("body:%d", region)
+			region++
+			switch resolve[id] {
+			case TakeYours:
+				out.WriteString(yChunk)
+			case TakeCurrent:
+				out.WriteString(cChunk)
+			default:
+				conflicts = append(conflicts, BodyConflict{ID: id, Line: c + 1, Base: bChunk, Current: cChunk, Yours: yChunk})
+				out.WriteString(cChunk)
+			}
 		}
 		i, c, y = j, ce, ye
 	}

@@ -20,6 +20,13 @@ type SaveOptions struct {
 	// used only when its fingerprint is that revision, so a caller cannot
 	// pass off other text as the base.
 	Base []byte
+	// Resolve settles conflicts by id ("field:<key>", "body:<n>") with
+	// TakeCurrent or TakeYours. Conflict ids are only meaningful for the
+	// page as it was when they were reported, so Resolve applies only while
+	// the page is still at revision ResolveRev; otherwise the conflicts are
+	// reported afresh.
+	Resolve    map[string]string
+	ResolveRev string
 }
 
 // SaveResult reports a saved edit.
@@ -106,8 +113,12 @@ func (w *Workspace) SaveSource(actor, ref, baseRev string, yours []byte, opt Sav
 		}
 		conflict := &Conflict{}
 		base, known := cur.baseSource(p.Path, baseRev, opt.Base)
+		var resolve map[string]string
+		if opt.ResolveRev == currentRev {
+			resolve = opt.Resolve
+		}
 		if known {
-			merged, c, err := merge3(base, raw, yours)
+			merged, c, err := merge3(base, raw, yours, resolve)
 			if err != nil {
 				return nil, err
 			}

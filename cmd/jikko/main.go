@@ -722,8 +722,18 @@ func view(args []string) error {
 
 func save(args []string) error {
 	var asJSON *bool
-	var rev, file, base *string
+	var rev, file, base, against *string
+	resolve := map[string]string{}
 	args, dir, token, err := flags("save", args, func(f *flag.FlagSet) {
+		against = f.String("against", "", "current revision a conflict was reported for; --resolve applies only while the page is still at it")
+		f.Func("resolve", "settle a reported conflict: <id>=current or <id>=yours (repeatable)", func(v string) error {
+			id, side, ok := strings.Cut(v, "=")
+			if !ok || (side != jikko.TakeCurrent && side != jikko.TakeYours) {
+				return fmt.Errorf("--resolve takes <conflict id>=current or <conflict id>=yours")
+			}
+			resolve[id] = side
+			return nil
+		})
 		asJSON = f.Bool("json", false, "JSON output, including a structured conflict")
 		rev = f.String("rev", "", "revision the edit was based on (from show --json or show --raw)")
 		file = f.String("file", "-", "edited source, or - for standard input")
@@ -745,7 +755,10 @@ func save(args []string) error {
 	if err != nil {
 		return err
 	}
-	var opt jikko.SaveOptions
+	opt := jikko.SaveOptions{Resolve: resolve, ResolveRev: *against}
+	if len(resolve) > 0 && *against == "" {
+		return errors.New("--resolve needs --against <current rev> from the reported conflict")
+	}
 	if *base != "" {
 		if opt.Base, err = readInput(*base); err != nil {
 			return err
@@ -793,12 +806,13 @@ func printConflict(c jikko.Conflict) {
 		return *v
 	}
 	for _, f := range c.Fields {
-		fmt.Printf("  field %s: base %s, current %s, yours %s\n", f.Key, value(f.Base), value(f.Current), value(f.Yours))
+		fmt.Printf("  [%s] base %s, current %s, yours %s\n", f.ID, value(f.Base), value(f.Current), value(f.Yours))
 	}
 	indent := func(s string) string {
 		return strings.TrimSuffix(strings.ReplaceAll("\n"+s, "\n", "\n      "), "\n      ")
 	}
 	for _, b := range c.Body {
-		fmt.Printf("  body at line %d:\n    base:%s\n    current:%s\n    yours:%s\n", b.Line, indent(b.Base), indent(b.Current), indent(b.Yours))
+		fmt.Printf("  [%s] body at line %d:\n    base:%s\n    current:%s\n    yours:%s\n", b.ID, b.Line, indent(b.Base), indent(b.Current), indent(b.Yours))
 	}
+	fmt.Printf("  settle with: --against %s --resolve <id>=current|yours\n", c.CurrentRev)
 }
