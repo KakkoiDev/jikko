@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"unicode"
 )
 
 // Commit records current workspace changes in Git with Jikko actor attribution.
@@ -20,6 +21,11 @@ func (w *Workspace) Commit(actor, message, operation string) error {
 	}
 	if operation == "" {
 		operation = "workspace-mutation"
+	}
+	// The operation is written into the trailer block. A line break would let
+	// the caller append a forged Jikko-Actor trailer of its own.
+	if strings.ContainsFunc(operation, unicode.IsControl) || strings.ContainsFunc(operation, unicode.IsSpace) {
+		return fmt.Errorf("operation %q must be a single word", operation)
 	}
 	if err := gitRun(w.Root, "rev-parse", "--is-inside-work-tree"); err != nil {
 		return fmt.Errorf("workspace is not Git-backed: %w", err)
