@@ -11,7 +11,8 @@ import (
 )
 
 // ExportZIP returns a portable snapshot of the workspace source and assets.
-// Runtime internals, Git history and credentials are deliberately excluded.
+// Runtime internals, Git history and credentials are deliberately excluded, as
+// are symbolic links and other non-regular files.
 func (w *Workspace) ExportZIP() ([]byte, error) {
 	var out bytes.Buffer
 	zw := zip.NewWriter(&out)
@@ -33,7 +34,14 @@ func (w *Workspace) ExportZIP() ([]byte, error) {
 			}
 			return nil
 		}
-		if d.Name() == ".auth.md" {
+		// A .git file marks a worktree or submodule and is Git internals too.
+		if strings.EqualFold(d.Name(), ".auth.md") || d.Name() == ".git" {
+			return nil
+		}
+		// Only regular files are source. Following a symbolic link would copy
+		// whatever it points at -- outside the root, or the credential file --
+		// into a portable archive.
+		if !d.Type().IsRegular() {
 			return nil
 		}
 		if strings.HasPrefix(rel, "../") {

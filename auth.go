@@ -170,21 +170,31 @@ func (w *Workspace) Authenticate(token string) (*Page, error) {
 	return p, nil
 }
 
+// RevokeCredentials removes every credential of an identity. The identity
+// file may already be gone: its credentials are then matched by the name they
+// were stored under, because an orphaned credential would authenticate again
+// as soon as an identity of that name reappeared.
 func (w *Workspace) RevokeCredentials(identity string) error {
-	p, ok := w.ResolveIdentity(identity)
-	if !ok {
-		return fmt.Errorf("identity %q not found or ambiguous", identity)
+	stem := strings.TrimSuffix(strings.TrimSpace(filepath.ToSlash(identity)), ".md")
+	p, resolved := w.ResolveIdentity(identity)
+	if resolved {
+		stem = strings.TrimSuffix(p.Path, ".md")
 	}
 	a, err := LoadAuth(w.Root)
 	if err != nil {
 		return err
 	}
-	stem := strings.TrimSuffix(p.Path, ".md")
-	kept := a.Credentials[:0]
+	kept := make([]Credential, 0, len(a.Credentials))
 	for _, c := range a.Credentials {
 		if c.Identity != stem {
 			kept = append(kept, c)
 		}
+	}
+	if len(kept) == len(a.Credentials) {
+		if !resolved {
+			return fmt.Errorf("identity %q not found or ambiguous, and no credential is stored under that name", identity)
+		}
+		return nil
 	}
 	a.Credentials = kept
 	return saveAuth(w.Root, a)

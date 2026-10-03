@@ -144,3 +144,76 @@ func TestReplaceBodyFailsClosed(t *testing.T) {
 		t.Fatalf("note.md = %q, want original restored", got)
 	}
 }
+
+// A file whose closing fence is the last line, with no trailing newline, used
+// to have the new body glued onto the fence, and the mutation was rejected.
+func TestReplaceBodyAfterFenceAtEndOfFile(t *testing.T) {
+	for name, c := range map[string]struct{ src, want string }{
+		"LF":   {"---\nstatus: x\n---", "---\nstatus: x\n---\n# Hi\n"},
+		"CRLF": {"---\r\nstatus: x\r\n---", "---\r\nstatus: x\r\n---\r\n# Hi\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			write(t, root, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+			write(t, root, "n.md", c.src)
+			w, err := Open(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.ReplaceBody("alice", "n", "# Hi\n"); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := os.ReadFile(filepath.Join(root, "n.md"))
+			if string(got) != c.want {
+				t.Fatalf("n.md = %q, want %q", got, c.want)
+			}
+			if p := w.Pages["n.md"]; p.Metadata["status"] != "x" || p.Title != "Hi" {
+				t.Fatalf("page = %#v", p)
+			}
+		})
+	}
+}
+
+func TestReplaceBodyAuthorization(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+	write(t, root, "bob.md", "---\ntype: identity\n---\n# Bob\n")
+	write(t, root, "v.md", "---\ntype: view\n---\n")
+	write(t, root, "s.md", "---\npermissions:\n  comment: bob\n  admin: alice\n---\n# S\n")
+	w, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.ReplaceBody("alice", "v", "# no\n"); err == nil {
+		t.Fatal("view body accepted")
+	}
+	if err := w.ReplaceBody("bob", "s", "# mine\n"); err == nil {
+		t.Fatal("comment capability allowed a content edit")
+	}
+	if err := w.ReplaceBody("alice", "missing", "x"); err == nil {
+		t.Fatal("missing reference accepted")
+	}
+	token, err := w.CreateCredential("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.ReplaceBodyWithToken("jk_bad", "s", "x"); err == nil {
+		t.Fatal("bad token accepted")
+	}
+	if err := w.ReplaceBodyWithToken(token, "s", "# Updated\n"); err != nil {
+		t.Fatal(err)
+	}
+	if w.Pages["s.md"].Title != "Updated" {
+		t.Fatal("workspace not refreshed")
+	}
+	if _, err := w.AuthorizeToken(token, w.Pages["s.md"], Admin); err != nil {
+		t.Fatal(err)
+	}
+	bobToken, _ := w.CreateCredential("bob")
+	if _, err := w.AuthorizeToken(bobToken, w.Pages["s.md"], Write); err == nil {
+		t.Fatal("commenter authorized to write")
+	}
+	if _, err := w.AuthorizeToken("jk_bad", w.Pages["s.md"], Read); err == nil {
+		t.Fatal("bad token authorized")
+	}
+}

@@ -189,11 +189,15 @@ func writeAtomic(target string, data []byte) error {
 func rewriteFrontmatter(raw []byte, edit func(*yaml.Node) error) ([]byte, error) {
 	front, body, hasFront := splitFrontmatter(raw)
 	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	var lead []byte
+	if bytes.HasPrefix(raw, bom) {
+		lead = bom
+	}
 	if !hasFront {
-		if bytes.HasPrefix(raw, []byte("---")) {
+		if opensFrontmatter(raw) {
 			return nil, errors.New(`frontmatter opens with "---" but has no closing "---" line; fix the file before mutating it`)
 		}
-		body = raw
+		body = raw[len(lead):]
 	} else if len(bytes.TrimSpace(front)) > 0 {
 		var doc yaml.Node
 		if err := yaml.Unmarshal(front, &doc); err != nil {
@@ -207,6 +211,12 @@ func rewriteFrontmatter(raw []byte, edit func(*yaml.Node) error) ([]byte, error)
 	}
 	if err := edit(mapping); err != nil {
 		return nil, err
+	}
+	// An edit that added nothing to a page without frontmatter is a no-op.
+	// Writing an empty "{}" block would change the file and leave a flow-style
+	// mapping that every later edit inherits.
+	if !hasFront && len(mapping.Content) == 0 {
+		return raw, nil
 	}
 
 	var encoded bytes.Buffer
@@ -224,7 +234,8 @@ func rewriteFrontmatter(raw []byte, edit func(*yaml.Node) error) ([]byte, error)
 	if usesCRLF(front) || (!hasFront && usesCRLF(body)) {
 		header = bytes.ReplaceAll(header, []byte("\n"), []byte("\r\n"))
 	}
-	return append(header, body...), nil
+	out := append(append([]byte(nil), lead...), header...)
+	return append(out, body...), nil
 }
 
 func usesCRLF(b []byte) bool { return bytes.Contains(b, []byte("\r\n")) }

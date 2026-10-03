@@ -12,17 +12,18 @@ import (
 	jikko "github.com/KakkoiDev/jikko"
 )
 
+var commands = map[string]func([]string) error{
+	"list": list, "show": show, "auth": auth, "set": set,
+	"perm": perm, "serve": serve, "check": check,
+	"tree": tree, "mentions": mentions, "create": create, "commit": commit, "export": exportWorkspace,
+}
+
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("jikko: ")
 	if len(os.Args) < 2 {
 		usage()
 		return
-	}
-	commands := map[string]func([]string) error{
-		"list": list, "show": show, "auth": auth, "set": set,
-		"perm": perm, "serve": serve, "check": check,
-		"tree": tree, "mentions": mentions, "create": create, "commit": commit, "export": exportWorkspace,
 	}
 	run, ok := commands[os.Args[1]]
 	if !ok {
@@ -45,7 +46,8 @@ func usage() {
   tree    list the permission-filtered workspace tree
   mentions list pages addressing the authenticated identity
   create  create a Markdown document or task
-  commit  record changes with actor-attributed Git audit trailers\n  export  export a portable workspace ZIP
+  commit  record changes with actor-attributed Git audit trailers
+  export  export a portable workspace ZIP
   set     set a metadata property
   perm    grant or clear a capability on a page
   auth    create or revoke a credential
