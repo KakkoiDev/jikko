@@ -224,7 +224,29 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/pages", s.pages)
 	mux.HandleFunc("/events", s.events)
 	mux.HandleFunc("/", s.index)
-	return mux
+	return securityHeaders(mux)
+}
+
+// contentSecurityPolicy allows only the server's own scripts, styles, and
+// connections. The page has no inline script, style, or event handler, and
+// uses no hx-on expressions, so HTMX needs neither 'unsafe-inline' nor
+// 'unsafe-eval'; its indicator styles are a constructed stylesheet, which
+// style-src does not govern. data: images cover the icons inlined in the
+// Basecoat stylesheet.
+const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+	"connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+// securityHeaders sets the headers every response carries: a strict content
+// security policy, no MIME sniffing, no framing, and no cross-origin referrer.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", contentSecurityPolicy)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // fail answers a request that could not be served. The detail goes to the log,

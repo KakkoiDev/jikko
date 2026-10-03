@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -738,5 +739,50 @@ func TestEventStreamPushesChanges(t *testing.T) {
 			t.Fatal("stream slot not released after the client left")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Every response carries the security headers, errors and assets included.
+func TestSecurityHeaders(t *testing.T) {
+	_, h, _, _ := teamServer(t)
+	for _, target := range []string{"/", "/pages", "/assets/htmx.min.js", "/missing"} {
+		rec := get(t, h, target)
+		csp := rec.Header().Get("Content-Security-Policy")
+		for _, want := range []string{"default-src 'self'", "script-src 'self'", "frame-ancestors 'none'", "object-src 'none'"} {
+			if !strings.Contains(csp, want) {
+				t.Fatalf("%s: CSP %q lacks %q", target, csp, want)
+			}
+		}
+		if strings.Contains(csp, "unsafe-") {
+			t.Fatalf("%s: CSP relaxes itself: %q", target, csp)
+		}
+		if rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("X-Frame-Options") != "DENY" {
+			t.Fatalf("%s: headers = %v", target, rec.Header())
+		}
+	}
+}
+
+// The CSP forbids inline script and style, so the page must not need them.
+// This guards the templates against a change the policy would silently break.
+func TestPageNeedsNoInlineCode(t *testing.T) {
+	_, h, _, token := teamServer(t)
+	for _, mod := range []func(*http.Request){nil, func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+token) }} {
+		for _, target := range []string{"/", "/pages"} {
+			body := getWith(h, target, mod).Body.String()
+			lower := strings.ToLower(body)
+			for _, banned := range []string{"<style", " style=", "javascript:", "hx-on", "hx-live"} {
+				if strings.Contains(lower, banned) {
+					t.Fatalf("%s contains %q, which the CSP blocks", target, banned)
+				}
+			}
+			if regexp.MustCompile(`\son[a-z]+=`).MatchString(lower) {
+				t.Fatalf("%s has an inline event handler", target)
+			}
+			for _, tag := range regexp.MustCompile(`<script[^>]*>`).FindAllString(lower, -1) {
+				if !strings.Contains(tag, `src="/assets/`) {
+					t.Fatalf("%s has an inline or foreign script: %s", target, tag)
+				}
+			}
+		}
 	}
 }
