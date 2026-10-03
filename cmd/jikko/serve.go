@@ -32,6 +32,8 @@ const (
 	// maxStreams caps concurrent event streams, each of which costs a
 	// goroutine and a ticker.
 	maxStreams = 64
+	// maxLoginBody bounds the login form an unauthenticated caller may send.
+	maxLoginBody = 4 << 10
 )
 
 // cache holds the parsed workspace and re-reads it only when the Markdown tree
@@ -319,6 +321,9 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	// A token is a few dozen bytes; there is no reason to buffer megabytes of
+	// form body from an unauthenticated caller.
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
 	p, err := ws.Authenticate(r.FormValue("token"))
 	if err != nil {
 		log.Printf("login rejected: %v", err)
