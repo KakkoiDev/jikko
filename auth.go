@@ -70,17 +70,10 @@ func saveAuth(root string, a *AuthFile) error {
 	if err != nil {
 		return err
 	}
-	if err := writeAtomicMode(authPath(root), []byte("---\n"+string(b)+"---\n"), 0600); err != nil {
+	if err := writeAtomicPerm(authPath(root), []byte("---\n"+string(b)+"---\n"), 0600); err != nil {
 		return err
 	}
 	return ensureAuthGitignored(root)
-}
-
-func writeAtomicMode(target string, data []byte, mode os.FileMode) error {
-	if err := writeAtomic(target, data); err != nil {
-		return err
-	}
-	return os.Chmod(target, mode)
 }
 
 // gitignorePatterns that already exclude the credential file.
@@ -128,6 +121,9 @@ func (w *Workspace) CreateCredential(identity string) (string, error) {
 		return "", err
 	}
 	token := "jk_" + base64.RawURLEncoding.EncodeToString(raw)
+	// Read-modify-write of .auth.md: without the lock, two concurrent
+	// creations could each append to the same old list and one would vanish.
+	defer w.lock()()
 	a, err := LoadAuth(w.Root)
 	if err != nil {
 		return "", err
@@ -208,6 +204,7 @@ func (w *Workspace) RevokeCredentials(identity string) error {
 	if resolved {
 		stem = strings.TrimSuffix(p.Path, ".md")
 	}
+	defer w.lock()()
 	a, err := LoadAuth(w.Root)
 	if err != nil {
 		return err

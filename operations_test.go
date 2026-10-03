@@ -122,8 +122,9 @@ func TestReplaceBodyRefusesFrontmatterFence(t *testing.T) {
 	}
 }
 
-// A mutation that would leave the workspace with an unparseable source is
-// rejected and the file is restored.
+// A mutation is judged by its own effect on the workspace as it is now. A
+// defect that someone else introduced elsewhere is not blamed on it; a defect
+// the mutation itself would introduce is rejected and never reaches disk.
 func TestReplaceBodyFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "alice.md", "---\ntype: identity\n---\n# Alice\n")
@@ -133,15 +134,32 @@ func TestReplaceBodyFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, root, "other.md", "---\nstatus: [\n---\n# Other\n")
-	if err := w.ReplaceBody("alice", "note", "# Note\nnew\n"); err == nil {
+	if err := w.ReplaceBody("alice", "note", "# Note\nnew\n"); err != nil {
+		t.Fatalf("an unrelated defect was blamed on the mutation: %v", err)
+	}
+	if err := w.SetMetadata("alice", "note", "type", "bogus"); err == nil {
 		t.Fatal("mutation introducing a workspace problem accepted")
 	}
 	got, err := os.ReadFile(filepath.Join(root, "note.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "# Note\nold\n" {
-		t.Fatalf("note.md = %q, want original restored", got)
+	if string(got) != "# Note\nnew\n" {
+		t.Fatalf("note.md = %q, want the rejected edit absent", got)
+	}
+}
+
+// A byte order mark does not smuggle a frontmatter block in through a body.
+func TestReplaceBodyRejectsFenceBehindByteOrderMark(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+	write(t, root, "note.md", "# Note\n")
+	w, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.ReplaceBody("alice", "note", "\ufeff---\ntype: task\n---\n# Note\n"); err == nil {
+		t.Fatal("frontmatter injected through a body behind a byte order mark")
 	}
 }
 

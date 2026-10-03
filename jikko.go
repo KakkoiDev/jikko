@@ -96,6 +96,14 @@ type Workspace struct {
 // defects are collected in Problems and reported by `jikko check`, and any
 // page whose access policy cannot be evaluated is denied to everyone.
 func Open(root string) (*Workspace, error) {
+	return openOverlay(root, nil)
+}
+
+// openOverlay scans a workspace as Open does, but reads the files named in
+// overlay (workspace-relative, slash-separated) from memory instead of disk.
+// An overlay path that does not exist on disk is added as a new page. This
+// lets a mutation judge the workspace it would produce before writing a byte.
+func openOverlay(root string, overlay map[string][]byte) (*Workspace, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -124,13 +132,26 @@ func Open(root string) (*Workspace, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		page, problems := parseFile(p, rel, d)
+		var page *Page
+		var problems []Problem
+		if raw, ok := overlay[rel]; ok {
+			page, problems = parseSource(rel, raw, d.Type()&fs.ModeSymlink != 0)
+		} else {
+			page, problems = parseFile(p, rel, d)
+		}
 		w.Pages[rel] = page
 		w.Problems = append(w.Problems, problems...)
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	for _, rel := range sortedKeys(overlay) {
+		if _, seen := w.Pages[rel]; !seen {
+			page, problems := parseSource(rel, overlay[rel], false)
+			w.Pages[rel] = page
+			w.Problems = append(w.Problems, problems...)
+		}
 	}
 	w.index()
 	w.deriveBacklinks()
@@ -145,17 +166,22 @@ func (w *Workspace) report(pagePath, kind, format string, args ...any) {
 }
 
 func parseFile(fullPath, rel string, d fs.DirEntry) (*Page, []Problem) {
+	symlink := d.Type()&fs.ModeSymlink != 0
+	raw, err := os.ReadFile(fullPath)
+	if err != nil {
+		p := &Page{Path: rel, Title: stemOf(rel), Kind: Document, Metadata: map[string]any{}, aclUsable: true, symlink: symlink}
+		return p, []Problem{{Path: rel, Kind: ProblemParse, Message: fmt.Sprintf("unreadable: %v", err)}}
+	}
+	return parseSource(rel, raw, symlink)
+}
+
+// parseSource parses one page from its raw bytes.
+func parseSource(rel string, raw []byte, symlink bool) (*Page, []Problem) {
 	var problems []Problem
 	add := func(kind, format string, args ...any) {
 		problems = append(problems, Problem{Path: rel, Kind: kind, Message: fmt.Sprintf(format, args...)})
 	}
-	p := &Page{Path: rel, Kind: Document, Metadata: map[string]any{}, aclUsable: true, symlink: d.Type()&fs.ModeSymlink != 0}
-	raw, err := os.ReadFile(fullPath)
-	if err != nil {
-		p.Title = stemOf(rel)
-		add(ProblemParse, "unreadable: %v", err)
-		return p, problems
-	}
+	p := &Page{Path: rel, Kind: Document, Metadata: map[string]any{}, aclUsable: true, symlink: symlink}
 	p.rev = fingerprint(raw)
 
 	front, body, hasFront := splitFrontmatter(raw)

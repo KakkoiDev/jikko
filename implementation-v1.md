@@ -17,6 +17,8 @@ Implemented in the Go core:
 - fail-closed handling of an access policy that is present but cannot be evaluated;
 - effect-based authorization for mutations;
 - optimistic concurrency, atomic writes, and symlink containment for mutations;
+- staged mutations: the proposed workspace is built in memory and judged before anything is written, so a rejected mutation never touches disk;
+- per-workspace serialization of mutations and credential changes within a process;
 - surgical frontmatter edits that preserve key order, comments, and YAML types.
 
 `CanChangeMembers` remains the conservative pre-check it always was: changing a group that participates in ACLs requires effective `admin` on every affected file.

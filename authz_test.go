@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -460,5 +461,47 @@ func TestCredentialIdentityFollowsRevocation(t *testing.T) {
 	}
 	if _, err := w.CredentialIdentity(id); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("revoked credential re-checked as valid: %v", err)
+	}
+}
+
+// Concurrent credential creation used to read .auth.md, append, and write it
+// back unguarded, so one of two simultaneous tokens could vanish.
+func TestConcurrentCredentialCreationKeepsEveryToken(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+	const n = 12
+	tokens := make([]string, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		w, err := Open(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wg.Add(1)
+		go func(i int, w *Workspace) {
+			defer wg.Done()
+			tokens[i], errs[i] = w.CreateCredential("alice")
+		}(i, w)
+	}
+	wg.Wait()
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range tokens {
+		if errs[i] != nil {
+			t.Fatal(errs[i])
+		}
+		if _, err := w.Authenticate(tokens[i]); err != nil {
+			t.Fatalf("token %d lost: %v", i, err)
+		}
+	}
+	info, err := os.Stat(filepath.Join(d, ".auth.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf(".auth.md mode = %v", info.Mode().Perm())
 	}
 }
