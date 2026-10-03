@@ -96,20 +96,22 @@ func treeStamp(dir string) (string, error) {
 
 // sessionStore exchanges a permanent bearer token for a short-lived browser
 // session, so the token itself is never stored in a cookie or replayed on
-// every request.
+// every request. Each session remembers the credential it was created from,
+// so revoking that credential ends the session too.
 type sessionStore struct {
 	mu sync.Mutex
 	m  map[string]sessionEntry
 }
 
 type sessionEntry struct {
-	identity string
-	expires  time.Time
+	identity   string
+	credential string
+	expires    time.Time
 }
 
 func newSessionStore() *sessionStore { return &sessionStore{m: map[string]sessionEntry{}} }
 
-func (s *sessionStore) create(identity string) (string, error) {
+func (s *sessionStore) create(identity, credential string) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
@@ -123,24 +125,33 @@ func (s *sessionStore) create(identity string) (string, error) {
 			delete(s.m, k)
 		}
 	}
-	s.m[id] = sessionEntry{identity: identity, expires: now.Add(sessionTTL)}
+	s.m[id] = sessionEntry{identity: identity, credential: credential, expires: now.Add(sessionTTL)}
 	return id, nil
 }
 
-func (s *sessionStore) identity(id string) string {
+// lookup returns a live session without extending it.
+func (s *sessionStore) lookup(id string) (sessionEntry, bool) {
 	if id == "" {
-		return ""
+		return sessionEntry{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.m[id]
 	if !ok || time.Now().After(e.expires) {
 		delete(s.m, id)
-		return ""
+		return sessionEntry{}, false
 	}
-	e.expires = time.Now().Add(sessionTTL)
-	s.m[id] = e
-	return e.identity
+	return e, true
+}
+
+// touch slides a live session's expiry forward.
+func (s *sessionStore) touch(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e, ok := s.m[id]; ok && !time.Now().After(e.expires) {
+		e.expires = time.Now().Add(sessionTTL)
+		s.m[id] = e
+	}
 }
 
 func (s *sessionStore) drop(id string) {
@@ -213,7 +224,29 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/pages", s.pages)
 	mux.HandleFunc("/events", s.events)
 	mux.HandleFunc("/", s.index)
-	return mux
+	return securityHeaders(mux)
+}
+
+// contentSecurityPolicy allows only the server's own scripts, styles, and
+// connections. The page has no inline script, style, or event handler, and
+// uses no hx-on expressions, so HTMX needs neither 'unsafe-inline' nor
+// 'unsafe-eval'; its indicator styles are a constructed stylesheet, which
+// style-src does not govern. data: images cover the icons inlined in the
+// Basecoat stylesheet.
+const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+	"connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+// securityHeaders sets the headers every response carries: a strict content
+// security policy, no MIME sniffing, no framing, and no cross-origin referrer.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", contentSecurityPolicy)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // fail answers a request that could not be served. The detail goes to the log,
@@ -224,29 +257,44 @@ func (s *server) fail(w http.ResponseWriter, err error) {
 	http.Error(w, "the workspace could not be read; see the server log", http.StatusServiceUnavailable)
 }
 
-// actor identifies the caller from a bearer token or a browser session, and
-// re-checks that the identity still exists and is still an individual.
-func (s *server) actor(r *http.Request, ws *jikko.Workspace) string {
-	identity := ""
+// actor identifies the caller from a bearer token or a browser session.
+//
+// A session is only as good as the credential it was created from: on every
+// request the credential must still be stored and still map to the same
+// individual Identity. A session whose credential was revoked, or whose
+// Identity was deleted, renamed, or turned into a group, is dropped for good,
+// so it cannot come back if a same-named Identity reappears.
+//
+// extend slides the session's expiry. Only requests a person makes extend it;
+// a live event stream re-checks the session without keeping it alive.
+func (s *server) actor(r *http.Request, ws *jikko.Workspace, extend bool) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		p, err := ws.Authenticate(strings.TrimSpace(strings.TrimPrefix(h, "Bearer ")))
 		if err != nil {
 			return ""
 		}
-		identity = strings.TrimSuffix(p.Path, ".md")
-	} else if c, err := r.Cookie(sessionCookie); err == nil {
-		identity = s.sessions.identity(c.Value)
+		return strings.TrimSuffix(p.Path, ".md")
 	}
-	if identity == "" {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
 		return ""
 	}
-	if p, ok := ws.ResolveIdentity(identity); !ok || len(p.Members) != 0 {
+	e, ok := s.sessions.lookup(c.Value)
+	if !ok {
 		return ""
 	}
-	return identity
+	p, err := ws.CredentialIdentity(e.credential)
+	if err != nil || strings.TrimSuffix(p.Path, ".md") != e.identity {
+		s.sessions.drop(c.Value)
+		return ""
+	}
+	if extend {
+		s.sessions.touch(c.Value)
+	}
+	return e.identity
 }
 
-func (s *server) data(r *http.Request) (pageData, error) {
+func (s *server) data(r *http.Request, extend bool) (pageData, error) {
 	ws, err := s.cache.load()
 	if err != nil {
 		return pageData{}, err
@@ -267,20 +315,22 @@ func (s *server) data(r *http.Request) (pageData, error) {
 	if encoded := filters.Encode(); encoded != "" {
 		query = "?" + encoded
 	}
-	actor := s.actor(r, ws)
+	actor := s.actor(r, ws, extend)
 	return pageData{Pages: visiblePages(ws, actor, ws.List(kind, q.Get("status"))), Query: query, Actor: actor}, nil
 }
 
-func (s *server) render(name string, r *http.Request) (string, error) {
-	data, err := s.data(r)
+// render executes a template for the caller and also reports who the caller
+// was, so a live stream can notice when that changes.
+func (s *server) render(name string, r *http.Request, extend bool) (string, string, error) {
+	data, err := s.data(r, extend)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var b bytes.Buffer
 	if err := s.tmpl.ExecuteTemplate(&b, name, data); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return b.String(), nil
+	return b.String(), data.Actor, nil
 }
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +338,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	out, err := s.render("page", r)
+	out, _, err := s.render("page", r, true)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -298,7 +348,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) pages(w http.ResponseWriter, r *http.Request) {
-	out, err := s.render("pages", r)
+	out, _, err := s.render("pages", r, true)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -324,13 +374,13 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	// A token is a few dozen bytes; there is no reason to buffer megabytes of
 	// form body from an unauthenticated caller.
 	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
-	p, err := ws.Authenticate(r.FormValue("token"))
+	p, credential, err := ws.AuthenticateCredential(r.FormValue("token"))
 	if err != nil {
 		log.Printf("login rejected: %v", err)
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}
-	id, err := s.sessions.create(strings.TrimSuffix(p.Path, ".md"))
+	id, err := s.sessions.create(strings.TrimSuffix(p.Path, ".md"), credential)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -408,7 +458,11 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	previous, err := s.render("pages", r)
+	// A stream never extends the session it runs under, and it closes as soon
+	// as the caller it started for is no longer who the request authenticates
+	// as: a revoked credential, a removed Identity, or an expired session. The
+	// browser then reconnects with whatever access it still has.
+	previous, actor, err := s.render("pages", r, false)
 	if err != nil {
 		return
 	}
@@ -423,7 +477,10 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-ticker.C:
 		}
-		current, err := s.render("pages", r)
+		current, now, err := s.render("pages", r, false)
+		if err == nil && now != actor {
+			return
+		}
 		if err != nil || current == previous {
 			continue
 		}

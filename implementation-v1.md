@@ -17,6 +17,8 @@ Implemented in the Go core:
 - fail-closed handling of an access policy that is present but cannot be evaluated;
 - effect-based authorization for mutations;
 - optimistic concurrency, atomic writes, and symlink containment for mutations;
+- staged mutations: the proposed workspace is built in memory and judged before anything is written, so a rejected mutation never touches disk;
+- per-workspace serialization of mutations and credential changes within a process;
 - surgical frontmatter edits that preserve key order, comments, and YAML types.
 
 `CanChangeMembers` remains the conservative pre-check it always was: changing a group that participates in ACLs requires effective `admin` on every affected file.
@@ -37,7 +39,7 @@ The next runtime layer must enforce the documented work model without adding pag
 
 - deterministic validation available to CLI/JSON and browser;
 - structured Task mutations for status, responsibility, dependencies, blockers, and progress;
-- semantic comment/reply/resolve operations for durable discussion;
+- semantic comment/reply/resolve operations for durable discussion (implemented: `jikko comment`, specification §8.1);
 - proof references through ordinary links, embeds, commits, tests, measurements, files, external references, or approval;
 - warnings or rejection for completion when configured requirements remain unmet;
 - actor-attributed logical mutations and Git-backed audit history;

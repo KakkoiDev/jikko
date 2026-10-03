@@ -79,7 +79,9 @@ func (w *Workspace) Mentions(actor string) []*Page {
 			continue
 		}
 		found := false
-		scanProse(p.Body, func(line string) {
+		// "@name:" in front of a comment message attributes it; it is not a
+		// request for that identity's attention.
+		scanProse(blankCommentAuthors(p.Body), func(line string) {
 			if found {
 				return
 			}
@@ -108,6 +110,7 @@ func (w *Workspace) Mentions(actor string) []*Page {
 // is rejected if it would raise anyone's access to a file the creator may not
 // administer. The creator administers the page it creates.
 func (w *Workspace) CreatePage(actor, pagePath, content string) error {
+	defer w.lock()()
 	person, ok := w.ResolveIdentity(actor)
 	if !ok || len(person.Members) != 0 {
 		return fmt.Errorf("authentication required as an individual identity")
@@ -142,25 +145,20 @@ func (w *Workspace) CreatePage(actor, pagePath, content string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-		return err
-	}
-	before := w.snapshot()
-	if err := writeAtomic(target, []byte(content)); err != nil {
-		return err
-	}
-	proposed, err := Open(w.Root)
-	if err != nil {
-		_ = os.Remove(target)
-		return err
-	}
-	adminBefore := func(p string) bool { return p == clean || before.admins[p][actor] }
-	if err := before.diff(proposed.snapshot(), adminBefore); err != nil {
-		_ = os.Remove(target)
-		return fmt.Errorf("creation rejected: %w", err)
-	}
-	*w = *proposed
-	return nil
+	return w.stage(actor, "creation", map[string][]byte{clean: []byte(content)}, func(current *Workspace) error {
+		if _, exists := current.Pages[clean]; exists {
+			return fmt.Errorf("%s already exists", clean)
+		}
+		return nil
+	}, func() error {
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return err
+		}
+		if _, err := os.Lstat(target); err == nil {
+			return fmt.Errorf("%s already exists", clean)
+		}
+		return writeAtomicPerm(target, []byte(content), 0644)
+	})
 }
 
 // reservedPath reports whether a workspace-relative path belongs to harness

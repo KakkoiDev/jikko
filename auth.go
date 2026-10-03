@@ -70,17 +70,10 @@ func saveAuth(root string, a *AuthFile) error {
 	if err != nil {
 		return err
 	}
-	if err := writeAtomicMode(authPath(root), []byte("---\n"+string(b)+"---\n"), 0600); err != nil {
+	if err := writeAtomicPerm(authPath(root), []byte("---\n"+string(b)+"---\n"), 0600); err != nil {
 		return err
 	}
 	return ensureAuthGitignored(root)
-}
-
-func writeAtomicMode(target string, data []byte, mode os.FileMode) error {
-	if err := writeAtomic(target, data); err != nil {
-		return err
-	}
-	return os.Chmod(target, mode)
 }
 
 // gitignorePatterns that already exclude the credential file.
@@ -128,6 +121,9 @@ func (w *Workspace) CreateCredential(identity string) (string, error) {
 		return "", err
 	}
 	token := "jk_" + base64.RawURLEncoding.EncodeToString(raw)
+	// Read-modify-write of .auth.md: without the lock, two concurrent
+	// creations could each append to the same old list and one would vanish.
+	defer w.lock()()
 	a, err := LoadAuth(w.Root)
 	if err != nil {
 		return "", err
@@ -143,14 +139,42 @@ func (w *Workspace) CreateCredential(identity string) (string, error) {
 // Every credential is compared in constant time and the whole list is scanned,
 // so neither the hash nor the position of a match is observable by timing.
 func (w *Workspace) Authenticate(token string) (*Page, error) {
+	p, _, err := w.AuthenticateCredential(token)
+	return p, err
+}
+
+// AuthenticateCredential is Authenticate that also returns the id of the
+// credential that matched. A harness that issues something derived from the
+// token, such as a browser session, keeps the id so it can later ask
+// CredentialIdentity whether that credential still stands.
+//
+// The id is the credential's stored hash: it identifies the credential
+// uniquely and reveals nothing that .auth.md does not already hold, but it is
+// not a bearer token and does not authenticate anyone.
+func (w *Workspace) AuthenticateCredential(token string) (*Page, string, error) {
 	if token == "" {
+		return nil, "", ErrAuthentication
+	}
+	p, err := w.CredentialIdentity(tokenHash(token))
+	if err != nil {
+		return nil, "", err
+	}
+	return p, tokenHash(token), nil
+}
+
+// CredentialIdentity re-checks a credential by id: it must still be stored
+// in .auth.md and still map to an existing individual Identity. Revoking the
+// credential, deleting its Identity, or turning that Identity into a group
+// all make it fail.
+func (w *Workspace) CredentialIdentity(id string) (*Page, error) {
+	if id == "" {
 		return nil, ErrAuthentication
 	}
 	a, err := LoadAuth(w.Root)
 	if err != nil {
 		return nil, err
 	}
-	want := []byte(tokenHash(token))
+	want := []byte(id)
 	matched := ""
 	for _, c := range a.Credentials {
 		if subtle.ConstantTimeCompare([]byte(c.TokenHash), want) == 1 {
@@ -180,6 +204,7 @@ func (w *Workspace) RevokeCredentials(identity string) error {
 	if resolved {
 		stem = strings.TrimSuffix(p.Path, ".md")
 	}
+	defer w.lock()()
 	a, err := LoadAuth(w.Root)
 	if err != nil {
 		return err

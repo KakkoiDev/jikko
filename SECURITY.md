@@ -46,3 +46,13 @@ its own. To reach it from elsewhere, put it behind a reverse proxy that
 terminates TLS and pass `--behind-proxy` so session cookies are marked
 `Secure`. Only pass that flag when a proxy you trust actually sets
 `X-Forwarded-Proto`.
+
+A browser session is bound to the credential it was exchanged for. Revoking
+that credential, or deleting the Identity behind it or turning it into a
+group, ends the session on its next request; an open event stream notices
+within seconds and closes. Event streams never extend a session's expiry.
+
+Every response from `jikko serve` carries a Content Security Policy that
+allows only the server's own scripts, styles, and connections and forbids
+framing (`frame-ancestors 'none'`), together with `X-Content-Type-Options:
+nosniff`. The pages it serves need no inline script or style.

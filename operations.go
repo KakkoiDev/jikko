@@ -40,6 +40,7 @@ func (w *Workspace) SetMetadataWithToken(token, ref, key, value string) error {
 // unchanged. It requires write and is judged like any other mutation, so a body
 // that changes the workspace's effective access is rejected.
 func (w *Workspace) ReplaceBody(actor, ref, body string) error {
+	defer w.lock()()
 	p, ok := w.Resolve(ref)
 	if !ok {
 		return fmt.Errorf("reference %q not found or ambiguous", ref)
@@ -50,13 +51,14 @@ func (w *Workspace) ReplaceBody(actor, ref, body string) error {
 	if !w.Allowed(actor, p, Write) {
 		return fmt.Errorf("%s lacks write on %s", actor, p.Path)
 	}
-	return w.mutateFile(actor, p, func(raw []byte) ([]byte, error) {
+	return w.mutateFile(actor, p, Write, func(raw []byte) ([]byte, error) {
 		_, old, hasFront := splitFrontmatter(raw)
 		if !hasFront {
 			if opensFrontmatter(raw) {
 				return nil, errors.New(`frontmatter opens with "---" but has no closing "---" line; fix the file before mutating it`)
 			}
-			if strings.HasPrefix(body, "---") {
+			// A byte order mark in front of the fence still opens frontmatter.
+			if strings.HasPrefix(strings.TrimPrefix(body, "\ufeff"), "---") {
 				return nil, errors.New(`body must not open with a "---" frontmatter fence; use set or perm to change metadata`)
 			}
 			return []byte(body), nil

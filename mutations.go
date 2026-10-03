@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,26 +30,28 @@ func sortedKeys[V any](m map[string]V) []string {
 // date. A property that currently holds a sequence accepts a comma-separated
 // list.
 func (w *Workspace) SetMetadata(actor, ref, key, value string) error {
-	p, ok := w.Resolve(ref)
-	if !ok {
-		return fmt.Errorf("reference %q not found or ambiguous", ref)
-	}
 	if strings.TrimSpace(key) == "" {
 		return errors.New("property name required")
 	}
 	if key == "permissions" {
 		return errors.New("permissions is an access-control policy: use `jikko perm <reference> <capability> [identity...]`")
 	}
+	defer w.lock()()
+	p, ok := w.Resolve(ref)
+	if !ok {
+		return fmt.Errorf("reference %q not found or ambiguous", ref)
+	}
 	if !w.Allowed(actor, p, Write) {
 		return fmt.Errorf("%s lacks write permission on %s", actor, p.Path)
 	}
-	return w.mutate(actor, p, func(m *yaml.Node) error { return setMappingValue(m, key, value) })
+	return w.mutate(actor, p, Write, func(m *yaml.Node) error { return setMappingValue(m, key, value) })
 }
 
 // SetPermission grants a capability on a page to the named identities,
 // replacing any existing grant for that capability. Passing no identity
 // removes the grant. Changing access-control policy requires admin.
 func (w *Workspace) SetPermission(actor, ref, capability string, subjects ...string) error {
+	defer w.lock()()
 	p, ok := w.Resolve(ref)
 	if !ok {
 		return fmt.Errorf("reference %q not found or ambiguous", ref)
@@ -71,19 +74,23 @@ func (w *Workspace) SetPermission(actor, ref, capability string, subjects ...str
 		}
 		clean = append(clean, s)
 	}
-	return w.mutate(actor, p, func(m *yaml.Node) error { return setPermissionEntry(m, want.String(), clean) })
+	return w.mutate(actor, p, Admin, func(m *yaml.Node) error { return setPermissionEntry(m, want.String(), clean) })
 }
 
-// mutate applies edit to a page's frontmatter and commits it only if the
-// resulting workspace is no worse than the current one. It enforces optimistic
-// concurrency, writes atomically, and rolls back on rejection.
-func (w *Workspace) mutate(actor string, p *Page, edit func(*yaml.Node) error) error {
-	return w.mutateFile(actor, p, func(raw []byte) ([]byte, error) { return rewriteFrontmatter(raw, edit) })
+// mutate applies edit to a page's frontmatter under the guards of mutateFile.
+func (w *Workspace) mutate(actor string, p *Page, need Capability, edit func(*yaml.Node) error) error {
+	return w.mutateFile(actor, p, need, func(raw []byte) ([]byte, error) { return rewriteFrontmatter(raw, edit) })
 }
 
-// mutateFile applies rewrite to a page's raw source under the same guards as
-// mutate.
-func (w *Workspace) mutateFile(actor string, p *Page, rewrite func([]byte) ([]byte, error)) error {
+// mutateFile applies rewrite to a page's raw source. The caller holds w.lock.
+//
+// The edit is staged, never tried out on disk: the page must still hold the
+// bytes it was read from (optimistic concurrency), the proposed workspace is
+// built in memory with the rewritten page in place of the file, and only a
+// proposal that the actor may make and that is no worse than the current
+// workspace is written, atomically. A rejected mutation leaves the file
+// untouched.
+func (w *Workspace) mutateFile(actor string, p *Page, need Capability, rewrite func([]byte) ([]byte, error)) error {
 	if actorPage, ok := w.ResolveIdentity(actor); ok {
 		actor = strings.TrimSuffix(actorPage.Path, ".md")
 	}
@@ -105,23 +112,82 @@ func (w *Workspace) mutateFile(actor string, p *Page, rewrite func([]byte) ([]by
 	if bytes.Equal(next, raw) {
 		return nil
 	}
+	return w.stage(actor, "mutation", map[string][]byte{p.Path: next}, func(current *Workspace) error {
+		// Judge the actor against the workspace as it is now, not as this
+		// Workspace last saw it: a group elsewhere may have changed since.
+		if cur, ok := current.Pages[p.Path]; !ok || cur.rev != p.rev {
+			return fmt.Errorf("%s changed on disk after it was read; re-read the workspace and retry", p.Path)
+		} else if !current.Allowed(actor, cur, need) {
+			return fmt.Errorf("%s lacks %s permission on %s", actor, need, p.Path)
+		}
+		return nil
+	}, func() error { return writeAtomic(target, next) })
+}
 
-	before := w.snapshot()
-	adminBefore := func(pagePath string) bool { return before.admins[pagePath][actor] }
-	if err := writeAtomic(target, next); err != nil {
+// stage judges a proposed change and applies it only if it passes. overlay
+// holds the new bytes of every file the change writes, keyed by
+// workspace-relative path. precheck runs against the current workspace;
+// write puts the overlay on disk. The caller holds w.lock.
+func (w *Workspace) stage(actor, what string, overlay map[string][]byte, precheck func(current *Workspace) error, write func() error) error {
+	current, err := Open(w.Root)
+	if err != nil {
 		return err
 	}
-	proposed, err := Open(w.Root)
+	if precheck != nil {
+		if err := precheck(current); err != nil {
+			return err
+		}
+	}
+	proposed, err := openOverlay(w.Root, overlay)
 	if err != nil {
-		_ = writeAtomic(target, raw)
-		return fmt.Errorf("mutation rejected: %w", err)
+		return fmt.Errorf("%s rejected: %w", what, err)
+	}
+	before := current.snapshot()
+	adminBefore := func(pagePath string) bool {
+		if _, created := current.Pages[pagePath]; !created {
+			// The creator administers the page it creates.
+			if _, inOverlay := overlay[pagePath]; inOverlay {
+				return true
+			}
+		}
+		return before.admins[pagePath][actor]
 	}
 	if err := before.diff(proposed.snapshot(), adminBefore); err != nil {
-		_ = writeAtomic(target, raw)
-		return fmt.Errorf("mutation rejected: %w", err)
+		return fmt.Errorf("%s rejected: %w", what, err)
 	}
-	*w = *proposed
+	if err := write(); err != nil {
+		return err
+	}
+	w.adopt(proposed)
 	return nil
+}
+
+// workspaceLocks holds one mutex per workspace root, so every Workspace value
+// opened on the same directory in this process serializes its mutations.
+var workspaceLocks sync.Map
+
+// lock serializes mutations of the workspace and returns the unlock function.
+// It is held from the moment a mutation resolves its target until the new
+// state is swapped in, so concurrent mutations can neither lose an update nor
+// race on the swap. Use it as `defer w.lock()()`.
+//
+// The lock covers this process only. Another process, or a person with an
+// editor, is caught by the revision check instead.
+func (w *Workspace) lock() func() {
+	key := w.Root
+	if real, err := filepath.EvalSymlinks(key); err == nil {
+		key = real
+	}
+	m, _ := workspaceLocks.LoadOrStore(key, new(sync.Mutex))
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// adopt replaces w's state with next's. Root never changes, so it is not
+// written: reading it to take the lock cannot race with a swap.
+func (w *Workspace) adopt(next *Workspace) {
+	w.Pages, w.Problems, w.byStem = next.Pages, next.Problems, next.byStem
 }
 
 // safePath resolves a page to a real file inside the workspace. Jikko never
@@ -154,13 +220,20 @@ func (w *Workspace) safePath(p *Page) (string, error) {
 	return target, nil
 }
 
-// writeAtomic replaces a file through a temporary file and a rename, so a
-// crash or a concurrent reader never observes a half-written page.
+// writeAtomic replaces a file through a temporary file in the same directory
+// and a rename, so a crash or a concurrent reader never observes a
+// half-written page. An existing file keeps its mode; a new one gets 0644.
 func writeAtomic(target string, data []byte) error {
 	mode := os.FileMode(0644)
 	if info, err := os.Stat(target); err == nil {
 		mode = info.Mode().Perm()
 	}
+	return writeAtomicPerm(target, data, mode)
+}
+
+// writeAtomicPerm is writeAtomic with an explicit mode, applied before the
+// rename so the file is never visible with a wider one.
+func writeAtomicPerm(target string, data []byte, mode os.FileMode) error {
 	f, err := os.CreateTemp(filepath.Dir(target), ".jikko-*.tmp")
 	if err != nil {
 		return err
@@ -181,7 +254,16 @@ func writeAtomic(target string, data []byte) error {
 	if err := os.Chmod(tmp, mode); err != nil {
 		return err
 	}
-	return os.Rename(tmp, target)
+	if err := os.Rename(tmp, target); err != nil {
+		return err
+	}
+	// Persist the rename itself. Best effort: not every platform can sync a
+	// directory.
+	if d, err := os.Open(filepath.Dir(target)); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 // rewriteFrontmatter edits a file's frontmatter in place, preserving key

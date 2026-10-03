@@ -1,10 +1,13 @@
 package jikko
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestAuthorizationBearingGroupMutationRequiresAdmin(t *testing.T) {
@@ -506,5 +509,155 @@ func TestSetPermissionEdits(t *testing.T) {
 	// cannot be repaired through Jikko: that is host-local recovery.
 	if err := w.SetPermission("alice", "broken", "admin", "alice"); err == nil {
 		t.Fatal("unusable policy edited")
+	}
+}
+
+// A rejected mutation is judged in memory and never written: the file keeps
+// its bytes and its modification time, and no temporary file is left behind.
+func TestRejectedEscalationNeverTouchesDisk(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "bob.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "mallory.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "engineering.md", "---\ntype: identity\nmembers: [alice]\n---\n")
+	writeTest(t, d, "secret.md", "---\npermissions:\n  write: engineering\n  admin: bob\n---\n# Secret\n")
+	path := filepath.Join(d, "engineering.md")
+	old := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(path)
+
+	attempts := map[string]func() error{
+		// alice may write the group but not administer what it grants.
+		"add member": func() error { return w.SetMetadata("alice", "engineering", "members", "alice,mallory") },
+		// The group file is open, but demoting it strips a policy's grants.
+		"demote group": func() error { return w.SetMetadata("mallory", "engineering", "type", "document") },
+	}
+	for name, attempt := range attempts {
+		if err := attempt(); err == nil {
+			t.Fatalf("%s: escalation accepted", name)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(after) != string(before) {
+			t.Fatalf("%s: file changed: %q", name, after)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.ModTime().Equal(old) {
+			t.Fatalf("%s: file was written (mtime %v, want %v)", name, info.ModTime(), old)
+		}
+	}
+	entries, err := os.ReadDir(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".jikko-") {
+			t.Fatalf("temporary file left behind: %s", e.Name())
+		}
+	}
+	secret, _ := w.Resolve("secret")
+	if w.Allowed("mallory", secret, Write) {
+		t.Fatal("in-memory workspace adopted a rejected proposal")
+	}
+}
+
+// Concurrent mutations of one Workspace serialize: each one sees the state
+// the previous one left, so every update lands and none is lost.
+func TestConcurrentMutationsSerialize(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "task.md", "---\ntype: task\n---\n# Task\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs <- w.SetMetadata("alice", "task", fmt.Sprintf("k%02d", i), fmt.Sprint(i))
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("serialized mutation failed: %v", err)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(d, "task.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		if !strings.Contains(string(b), fmt.Sprintf("k%02d: %d\n", i, i)) {
+			t.Fatalf("update %d lost:\n%s", i, b)
+		}
+	}
+	if p, _ := w.Resolve("task"); len(p.Metadata) != n+1 {
+		t.Fatalf("in-memory page has %d properties, want %d", len(p.Metadata), n+1)
+	}
+}
+
+// Separate Workspace values on one directory serialize too. A value that read
+// the page before another one changed it is refused by the revision check
+// rather than overwriting the newer content.
+func TestConcurrentWorkspacesNeverLoseUpdates(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "task.md", "---\ntype: task\n---\n# Task\n")
+	const n = 8
+	spaces := make([]*Workspace, n)
+	for i := range spaces {
+		w, err := Open(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spaces[i] = w
+	}
+	var wg sync.WaitGroup
+	results := make([]error, n)
+	for i := range spaces {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = spaces[i].SetMetadata("alice", "task", fmt.Sprintf("k%d", i), "x")
+		}(i)
+	}
+	wg.Wait()
+	b, err := os.ReadFile(filepath.Join(d, "task.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	won := 0
+	for i, err := range results {
+		landed := strings.Contains(string(b), fmt.Sprintf("k%d: x", i))
+		switch {
+		case err == nil && !landed:
+			t.Fatalf("mutation %d reported success but was lost:\n%s", i, b)
+		case err != nil && landed:
+			t.Fatalf("mutation %d reported failure but landed", i)
+		case err != nil && !strings.Contains(err.Error(), "changed on disk"):
+			t.Fatalf("mutation %d: unexpected error %v", i, err)
+		case err == nil:
+			won++
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d stale workspaces wrote, want exactly 1", won)
 	}
 }
