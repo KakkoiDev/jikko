@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -68,25 +69,31 @@ func (idx assetIndex) resolve(from, ref string) (string, bool, bool) {
 }
 
 // UnresolvedReferences reports every [[link]] and ![[embed]] that names
-// neither a page nor a file of the workspace.
+// neither a page nor a file of the workspace, and every work-model reference
+// of a Task that does not resolve to what its field requires (specification
+// §2.2).
 func (w *Workspace) UnresolvedReferences() ([]Problem, error) {
 	var idx *assetIndex
+	var idxErr error
+	resolveFile := func(from, ref string) (bool, bool) {
+		if idx == nil && idxErr == nil {
+			built, err := w.assets()
+			idx, idxErr = &built, err
+		}
+		if idxErr != nil {
+			return false, false
+		}
+		_, ok, ambiguous := idx.resolve(from, ref)
+		return ok, ambiguous
+	}
 	var out []Problem
 	for _, p := range w.sorted() {
 		for _, ref := range append(append([]string{}, p.Links...), p.Embeds...) {
 			if _, ok := w.Resolve(ref); ok {
 				continue
 			}
-			ext := strings.ToLower(path.Ext(ref))
-			if ext != "" && ext != ".md" {
-				if idx == nil {
-					built, err := w.assets()
-					if err != nil {
-						return nil, err
-					}
-					idx = &built
-				}
-				_, ok, ambiguous := idx.resolve(p.Path, ref)
+			if isAssetRef(ref) {
+				ok, ambiguous := resolveFile(p.Path, ref)
 				if ok {
 					continue
 				}
@@ -98,5 +105,10 @@ func (w *Workspace) UnresolvedReferences() ([]Problem, error) {
 			out = append(out, Problem{Path: p.Path, Kind: ProblemReference, Message: fmt.Sprintf("unresolved %q", ref)})
 		}
 	}
+	out = append(out, w.workReferenceProblems(resolveFile)...)
+	if idxErr != nil {
+		return nil, idxErr
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
 }

@@ -56,7 +56,7 @@ func TestRenameRewritesLinksAndEmbeds(t *testing.T) {
 	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
 	writeTest(t, d, "notes/design.md", "# Design\n\nSelf: [[design]].\n")
 	writeTest(t, d, "index.md", "# Index\n\nSee [[design]], [[notes/design|the design]], [[design.md]] and\n\n![[notes/design]]\n\n```\n[[design]] stays in code\n```\n\nInline `[[design]]` too.\n")
-	writeTest(t, d, "task.md", "---\ntype: task\nstatus: todo\ndepends_on: design\nproof:\n  - \"[[design]]\"\n  - https://example.com/design\n---\n# Task\n")
+	writeTest(t, d, "task.md", "---\ntype: task\nstatus: todo\nblocked_by: design\nproof:\n  - \"[[design]]\"\n  - https://example.com/design\n---\n# Task\n")
 	w := openTest(t, d)
 	res, err := w.Rename("alice", "design", "archive/old-design", RenameOptions{})
 	if err != nil {
@@ -77,7 +77,7 @@ func TestRenameRewritesLinksAndEmbeds(t *testing.T) {
 		t.Fatalf("moved page = %q", got)
 	}
 	task := readFile(t, d, "task.md")
-	if !strings.Contains(task, "depends_on: old-design") || !strings.Contains(task, `"[[old-design]]"`) || !strings.Contains(task, "https://example.com/design") {
+	if !strings.Contains(task, "blocked_by: old-design") || !strings.Contains(task, `"[[old-design]]"`) || !strings.Contains(task, "https://example.com/design") {
 		t.Fatalf("task.md =\n%s", task)
 	}
 	if len(res.Rewritten) != 7 {

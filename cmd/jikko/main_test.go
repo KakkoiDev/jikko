@@ -578,3 +578,61 @@ func TestDeleteCommand(t *testing.T) {
 		t.Fatal("page not deleted")
 	}
 }
+
+func TestViewCommand(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("tasks/review.md", "---\ntype: task\nstatus: doing\nassignee: bob\npermissions:\n  read: alice\n  admin: alice\n---\n# Review\n")
+	write("tasks/plan.md", "---\ntype: task\nstatus: todo\n---\n# Plan\n")
+	write("by-status.md", "---\ntype: view\nfilter:\n  type: task\n  status: [todo, doing]\nview:\n  group: status\n  sort: title\n---\n")
+	write("broken.md", "---\ntype: view\nfilter: everything\n---\n")
+
+	out := mustCLI(t, view, "by-status", "--dir", dir, "--token", aliceToken)
+	want := "status: todo (2)\n  task      tasks/plan.md                  Plan\n  task      tasks/ship.md                  Ship it\nstatus: doing (1)\n  task      tasks/review.md                Review\n"
+	if out != want {
+		t.Fatalf("view output:\n%s\nwant:\n%s", out, want)
+	}
+	var res struct {
+		Pages  []struct{ Path string }
+		Groups []struct {
+			Key   string
+			Pages []struct{ Path string }
+		}
+	}
+	out = mustCLI(t, view, "by-status", "--json", "--dir", dir, "--token", bobToken)
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Pages) != 2 || len(res.Groups) != 2 || len(res.Groups[1].Pages) != 0 {
+		t.Fatalf("bob's view = %+v", res)
+	}
+	if out := mustCLI(t, view, "board", "--dir", dir); !strings.Contains(out, "tasks/ship.md") {
+		t.Fatalf("ungrouped view:\n%s", out)
+	}
+	if _, _, err := cli(t, view, "broken", "--dir", dir); err == nil {
+		t.Fatal("a broken view was evaluated")
+	}
+	if _, _, err := cli(t, view, "--dir", dir); err == nil {
+		t.Fatal("view without a reference accepted")
+	}
+	out, _, err := cli(t, check, "--dir", dir)
+	if err == nil || !strings.Contains(out, "broken.md: [view] filter must be a mapping") {
+		t.Fatalf("check:\n%s", out)
+	}
+}
+
+func TestCheckReportsWorkModel(t *testing.T) {
+	dir := workspace(t, map[string]string{
+		"alice.md": "---\ntype: identity\n---\n",
+		"a.md":     "---\ntype: task\nstatus: done\nrequires: [proof]\n---\n# A\n",
+		"b.md":     "---\ntype: task\nstatus: todo\nassignee: ghost\n---\n# B\n",
+	})
+	out, _, err := cli(t, check, "--dir", dir)
+	if err == nil || !strings.Contains(out, `b.md: [reference] assignee "ghost" is not an identity`) || !strings.Contains(out, "a.md: warning: [work] task is done but requires proof") {
+		t.Fatalf("check:\n%s", out)
+	}
+}

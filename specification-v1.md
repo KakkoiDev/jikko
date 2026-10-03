@@ -50,6 +50,34 @@ This model does not introduce Claim, Checkpoint, Evidence, Decision, Event, Mess
 
 The harness MUST expose semantic operations and validation that preserve this model. It MUST keep comments attached to their context, preserve actor attribution, make task state and responsibility queryable, validate resolvable proof references where possible, and surface unmet configured completion requirements. Enforcement MAY be a warning when hard rejection would make ordinary Markdown unusable, but it MUST be deterministic and available to both browser and machine interfaces.
 
+## 2.2 Work-model fields (reference harness reading)
+
+The reference harness reads a few Task properties as references so the work model can be checked without new primitives. They are ordinary metadata: any harness may ignore them, and a Document carrying them is not checked.
+
+```md
+---
+type: task
+status: done
+assignee: alice
+depends_on: [schema-migration]
+blocked_by: "[[vendor-contract]]"
+proof:
+  - "[[load-test-results]]"
+  - screenshots/dashboard.png
+  - https://ci.example.com/runs/812
+  - commit:1a2b3c4d
+requires: [proof, review]
+---
+```
+
+- `assignee` names one or more Identities (responsibility).
+- `depends_on` names Tasks that must be done first.
+- `blocked_by` names pages, usually Tasks, that block this one.
+- `proof` names evidence: a page, a workspace file, a URL, or `commit:<id>`.
+- `requires` lists completion requirements: `assignee`, `proof`, and `review` (no unresolved comments).
+
+A reference may be bare or wrapped as `"[[target]]"`. `jikko check` reports, as failing reference problems, an assignee that is not an Identity, a dependency that is not a Task, an unresolved blocker or proof, a `commit:` proof that names no commit of the workspace's Git history (when there is one to ask), and an unknown requirement. It reports, as warnings that never fail the check or refuse a change, a Task that is `doing` with no assignee and a Task that is `done` while a dependency or blocking Task is not, or while one of its requirements is unmet. `jikko set` prints the warnings for the page it changed. Rename rewrites these references like links (§7.1).
+
 ## 3. Fundamental file semantics
 
 Every Jikko source object is a Markdown file with optional YAML frontmatter and a Markdown body.
@@ -109,6 +137,16 @@ view:
 ```
 
 A View MUST NOT use its body for arbitrary narrative content or stored query results. Narrative composition belongs in a Document.
+
+#### 3.3.1 Reference harness reading
+
+`jikko view <reference> [--json]` evaluates a View over the pages the caller may read; the View itself must be readable. Where this section leaves room the harness reads a View as follows:
+
+- **`filter`** is a mapping of property to a value or a list of values. A page matches when, for every property, any of its values equals any listed value. `type` matches the page's type, with `document` matching untyped pages; `title` and `path` match the page's own; any other key matches frontmatter, where a list such as `tags` holds several values. Values compare as written text (a date as `2026-09-20`), and two references to the same page also match, so `assignee: alice` selects a Task assigned to `people/alice`. A View with no `filter` selects every readable page but itself.
+- **`view.sort`** is a property or a list of them, each optionally prefixed `-` for descending. Numbers compare numerically, dates chronologically, anything else as text; pages without the property come last; ties fall back to the path.
+- **`view.group`** is one property. A page with a list value appears in each of its groups. Values the `filter` lists for that property come first, in the filter's order and even when empty, so a board keeps its columns; other values follow in sort order, and pages without the property come last.
+- **`view.layout`** and other keys under `view` are presentation hints. The harness keeps unknown hints and does not validate their values.
+- **Validation.** A `filter` that is not a mapping, a filter value that is a mapping, an empty value list, an unknown `type`, a `view` that is not a mapping, and a `group` or `sort` of the wrong shape are workspace problems, so a mutation cannot introduce one.
 
 ### 3.4 Identity
 
@@ -200,7 +238,7 @@ Backlinks remain derived data.
 
 The reference harness implements rename and deletion as `jikko rename <reference> <new path> [--no-rewrite]` and `jikko delete <reference> [--prune]`. Where this section leaves room it takes the simplest safe reading:
 
-- **What is a reference.** `[[links]]` and `![[embeds]]` in prose (never in code), `@mentions` and comment attributions, and the reference-valued frontmatter keys: `members`, `assignee`, the subjects of `permissions`, and the work-model keys `depends_on`, `blocked_by`, and `proof`.
+- **What is a reference.** `[[links]]` and `![[embeds]]` in prose (never in code), `@mentions` and comment attributions, and the reference-valued frontmatter keys: `members`, `assignee`, the subjects of `permissions`, and the work-model keys `depends_on`, `blocked_by`, and `proof` (§2.2).
 - **Same target afterwards.** A rename rewrites every reference that resolved before so that it resolves to the same page or file afterwards. That includes references to *other* pages that the move would make ambiguous, which are rewritten to their full path, and relative asset embeds in the moved page, which are rewritten from the workspace root. A rewritten reference keeps its style: a bare name stays bare when the new bare name is unambiguous, a `.md` suffix and an `|alias` are kept. A rename that would leave some page addressable by no reference at all is refused.
 - **Meaning changes are reported.** A reference that resolved to nothing and would start resolving is reported as captured. With `--no-rewrite`, references that would stop resolving are reported as broken.
 - **Authority.** A rename needs `write` on the page. Rewriting a reference in another page is an edit of that page and needs `write` on it, and `admin` where its `permissions` change. A rename that cannot make every rewrite is refused as a whole, naming the readable pages in the way and counting the unreadable ones, rather than half done. A no-rewrite rename is still refused if it would break a membership or an access policy.

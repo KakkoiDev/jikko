@@ -235,8 +235,14 @@ func parseSource(rel string, raw []byte, symlink bool) (*Page, []Problem) {
 	problems = append(problems, commentProblems...)
 	p.Links, p.Embeds = refsIn(p.Body)
 
-	if p.Kind == View && strings.TrimSpace(p.Body) != "" {
-		add(ProblemStructure, "views must not contain a Markdown body")
+	if p.Kind == View {
+		if strings.TrimSpace(p.Body) != "" {
+			add(ProblemStructure, "views must not contain a Markdown body")
+		}
+		_, viewProblems := parseViewSpec(p.Metadata)
+		for _, msg := range viewProblems {
+			add(ProblemView, "%s", msg)
+		}
 	}
 	if p.Kind == Identity {
 		members, ok := stringList(p.Metadata["members"])

@@ -41,8 +41,9 @@ The next runtime layer must enforce the documented work model without adding pag
 - deterministic validation available to CLI/JSON and browser;
 - structured Task mutations for status, responsibility, dependencies, blockers, and progress;
 - semantic comment/reply/resolve operations for durable discussion (implemented: `jikko comment`, specification §8.1);
-- proof references through ordinary links, embeds, commits, tests, measurements, files, external references, or approval;
-- warnings or rejection for completion when configured requirements remain unmet;
+- proof references through ordinary links, embeds, commits, tests, measurements, files, external references, or approval (implemented: `assignee`, `depends_on`, `blocked_by`, `proof`, validated by `jikko check`, specification §2.2);
+- warnings or rejection for completion when configured requirements remain unmet (implemented as warnings through a Task's `requires`);
+- views evaluated over readable pages with filter, sort, and grouping (implemented: `jikko view`, specification §3.3.1);
 - actor-attributed logical mutations and Git-backed audit history;
 - onboarding and agent guidance that make Jikko the authoritative workspace.
 

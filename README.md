@@ -78,6 +78,30 @@ go run ./cmd/jikko show --dir /path/to/workspace session-design --json
 go run ./cmd/jikko check --dir /path/to/workspace
 ```
 
+A view is a saved query. `jikko view` evaluates it over the pages you may read:
+
+```md
+---
+type: view
+filter:
+  type: task
+  status: [todo, doing]
+view:
+  layout: board
+  group: status
+  sort: due
+---
+```
+
+```sh
+go run ./cmd/jikko view open-work --dir /path/to/workspace --json
+```
+
+Tasks can also name their responsibility, dependencies, and evidence with
+`assignee`, `depends_on`, `blocked_by`, `proof`, and `requires`; `check`
+validates those references and warns when a Task is done before its
+dependencies or without what it requires (see specification §2.2).
+
 `--json` is intended for agents/scripts. Markdown remains source of truth regardless of whether a human, browser, or agent edits it.
 
 Authenticated callers can make structured edits. A metadata mutation rewrites
@@ -113,7 +137,8 @@ group or an access policy names unless `--prune` removes those entries, and
 reports links it leaves dangling.
 
 `check` reports unresolved references together with workspace problems —
-malformed frontmatter, unknown types, views carrying a body, membership cycles,
+malformed frontmatter, unknown types, views carrying a body or an unusable
+definition, broken work-model references, membership cycles,
 and access policies naming identities that do not resolve. A problem is
 reported rather than fatal, so one bad file never makes the rest of a workspace
 unreadable, but a file whose access policy cannot be evaluated is denied to

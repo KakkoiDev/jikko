@@ -132,7 +132,7 @@ jikko comment resolve design c17
 jikko comment list [design] --json
 ```
 
-`jikko check` warns about a Task marked done while comments remain unresolved. See specification §8.1 for the details of the serialization.
+`jikko check` warns about a Task marked done while comments remain unresolved, while its `depends_on` Tasks are unfinished, or while its `requires` (proof, assignee, review) are unmet. Record evidence in `proof:` (pages, files, URLs, `commit:<id>`); `check` validates it. Use `jikko view <view> --json` to read tracked work the way a View defines it. See specification §8.1 for the details of the serialization.
 
 ## Go harness and mutations
 

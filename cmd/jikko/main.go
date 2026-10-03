@@ -17,6 +17,7 @@ var commands = map[string]func([]string) error{
 	"perm": perm, "serve": serve, "check": check,
 	"tree": tree, "mentions": mentions, "create": create, "commit": commit, "export": exportWorkspace,
 	"comment": comment, "rename": rename, "delete": deletePage,
+	"view": view,
 }
 
 func main() {
@@ -45,6 +46,7 @@ func usage() {
   list    list pages visible to you
   show    print one or more pages (batch reads)
   tree    list the permission-filtered workspace tree
+  view    evaluate a view: filter, sort, and group readable pages
   mentions list pages addressing the authenticated identity
   create  create a Markdown document or task
   commit  record changes with actor-attributed Git audit trailers
@@ -228,14 +230,15 @@ func set(args []string) error {
 	return nil
 }
 
-// warnUnresolved notes, without failing, that a Task now marked done still has
-// unresolved comments. The specification asks for a warning, not a refusal.
+// warnUnresolved notes, without failing, what the change left unmet: a Task
+// marked done with unresolved comments, unfinished dependencies, or unmet
+// completion requirements. The specification asks for warnings, not refusals.
 func warnUnresolved(w *jikko.Workspace, ref string) {
 	p, ok := w.Resolve(ref)
 	if !ok {
 		return
 	}
-	for _, warning := range w.UnresolvedCommentWarnings() {
+	for _, warning := range w.Warnings() {
 		if warning.Path == p.Path {
 			fmt.Fprintf(os.Stderr, "jikko: warning: %s: %s\n", warning.Path, warning.Message)
 		}
@@ -396,10 +399,7 @@ func check(args []string) error {
 		return err
 	}
 	problems := append(append([]jikko.Problem(nil), w.Problems...), unresolved...)
-	warnings := w.UnresolvedCommentWarnings()
-	if warnings == nil {
-		warnings = []jikko.Problem{}
-	}
+	warnings := w.Warnings()
 	if *asJSON {
 		if err := json.NewEncoder(os.Stdout).Encode(struct {
 			Pages    int             `json:"pages"`
@@ -660,4 +660,48 @@ func reportHidden(n int) {
 	if n > 0 {
 		fmt.Fprintf(os.Stderr, "jikko: %d affected reference(s) are in pages you cannot read\n", n)
 	}
+}
+
+func view(args []string) error {
+	var asJSON *bool
+	args, dir, token, err := flags("view", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
+	if err != nil {
+		return err
+	}
+	if len(args) != 1 {
+		return errors.New("usage: jikko view [flags] <view reference>")
+	}
+	w, err := openWorkspace(*dir)
+	if err != nil {
+		return err
+	}
+	actor, err := actorFor(w, *token)
+	if err != nil {
+		return err
+	}
+	res, err := w.EvaluateView(actor, args[0])
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(res)
+	}
+	printItems := func(indent string, items []jikko.ViewItem) {
+		for _, it := range items {
+			fmt.Printf("%s%-9s %-30s %s\n", indent, it.Type, it.Path, it.Title)
+		}
+	}
+	if res.Groups == nil {
+		printItems("", res.Pages)
+		return nil
+	}
+	for _, g := range res.Groups {
+		key := g.Key
+		if key == "" {
+			key = "(no " + res.Spec.Group + ")"
+		}
+		fmt.Printf("%s: %s (%d)\n", res.Spec.Group, key, len(g.Pages))
+		printItems("  ", g.Pages)
+	}
+	return nil
 }
