@@ -53,7 +53,7 @@ func (w *Workspace) ReplaceBody(actor, ref, body string) error {
 	return w.mutateFile(actor, p, func(raw []byte) ([]byte, error) {
 		_, old, hasFront := splitFrontmatter(raw)
 		if !hasFront {
-			if bytes.HasPrefix(raw, []byte("---")) {
+			if opensFrontmatter(raw) {
 				return nil, errors.New(`frontmatter opens with "---" but has no closing "---" line; fix the file before mutating it`)
 			}
 			if strings.HasPrefix(body, "---") {
@@ -62,6 +62,14 @@ func (w *Workspace) ReplaceBody(actor, ref, body string) error {
 			return []byte(body), nil
 		}
 		next := append([]byte(nil), raw[:len(raw)-len(old)]...)
+		// A closing fence at end of file has no line break; without one the
+		// body would be glued onto the fence and the frontmatter lost.
+		if !bytes.HasSuffix(next, []byte("\n")) && body != "" {
+			if usesCRLF(next) {
+				next = append(next, '\r')
+			}
+			next = append(next, '\n')
+		}
 		return append(next, body...), nil
 	})
 }
