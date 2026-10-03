@@ -189,11 +189,15 @@ func writeAtomic(target string, data []byte) error {
 func rewriteFrontmatter(raw []byte, edit func(*yaml.Node) error) ([]byte, error) {
 	front, body, hasFront := splitFrontmatter(raw)
 	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	var lead []byte
+	if bytes.HasPrefix(raw, bom) {
+		lead = bom
+	}
 	if !hasFront {
-		if bytes.HasPrefix(raw, []byte("---")) {
+		if opensFrontmatter(raw) {
 			return nil, errors.New(`frontmatter opens with "---" but has no closing "---" line; fix the file before mutating it`)
 		}
-		body = raw
+		body = raw[len(lead):]
 	} else if len(bytes.TrimSpace(front)) > 0 {
 		var doc yaml.Node
 		if err := yaml.Unmarshal(front, &doc); err != nil {
@@ -224,7 +228,8 @@ func rewriteFrontmatter(raw []byte, edit func(*yaml.Node) error) ([]byte, error)
 	if usesCRLF(front) || (!hasFront && usesCRLF(body)) {
 		header = bytes.ReplaceAll(header, []byte("\n"), []byte("\r\n"))
 	}
-	return append(header, body...), nil
+	out := append(append([]byte(nil), lead...), header...)
+	return append(out, body...), nil
 }
 
 func usesCRLF(b []byte) bool { return bytes.Contains(b, []byte("\r\n")) }

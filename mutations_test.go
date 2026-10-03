@@ -318,3 +318,29 @@ func TestClearingTheOnlyGrantIsRefused(t *testing.T) {
 		t.Fatal("policy was damaged")
 	}
 }
+
+// A byte order mark stays at the start of the file. Before frontmatter behind
+// a BOM was recognised, a mutation prepended a second frontmatter block and
+// left the original one stranded in the body.
+func TestMutationPreservesByteOrderMark(t *testing.T) {
+	for name, src := range map[string]string{
+		"with frontmatter":    "\ufeff---\nstatus: todo\n---\n# A\n",
+		"without frontmatter": "\ufeff# A\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := t.TempDir()
+			writeTest(t, d, "a.md", src)
+			w, err := Open(d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.SetMetadata("", "a", "status", "done"); err != nil {
+				t.Fatal(err)
+			}
+			b, _ := os.ReadFile(filepath.Join(d, "a.md"))
+			if got, want := string(b), "\ufeff---\nstatus: done\n---\n# A\n"; got != want {
+				t.Fatalf("a.md = %q, want %q", got, want)
+			}
+		})
+	}
+}

@@ -218,3 +218,172 @@ func TestStatusFilterMatchesTypedScalars(t *testing.T) {
 		t.Fatalf("a YAML number status is unselectable: %#v", got)
 	}
 }
+
+// An access policy YAML cannot read is not the absence of a policy. A syntax
+// error or a duplicate key anywhere in the frontmatter used to discard the
+// whole mapping and publish the file to everyone.
+func TestUnparseablePolicyDeniesEveryone(t *testing.T) {
+	for name, src := range map[string]string{
+		"syntax error":          "---\npermissions:\n  read: alice\nstatus: [\n---\n# S\n",
+		"duplicate key":         "---\npermissions:\n  read: alice\ntitle: a\ntitle: b\n---\n# S\n",
+		"duplicate policy":      "---\npermissions:\n  read: alice\npermissions:\n  read: bob\n---\n# S\n",
+		"flow mapping":          "---\n{permissions: {read: alice}, status: [}\n---\n# S\n",
+		"unterminated":          "---\npermissions:\n  read: alice\n# S\n",
+		"quoted key syntax err": "---\n\"permissions\":\n  read: alice\n bad: [\n---\n# S\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := t.TempDir()
+			write(t, d, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+			write(t, d, "s.md", src)
+			w, err := Open(d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := w.Pages["s.md"]
+			if !p.Restricted {
+				t.Fatal("unparseable policy treated as absent")
+			}
+			for _, actor := range []string{"alice", "nobody", ""} {
+				if w.Allowed(actor, p, Read) {
+					t.Fatalf("%q may read a file whose policy cannot be evaluated", actor)
+				}
+			}
+			if !problem(w, "s.md", "denied to everyone") {
+				t.Fatalf("problems = %#v", w.Problems)
+			}
+		})
+	}
+}
+
+// Broken frontmatter with no sign of a policy stays open: failing closed on
+// every typo would hide ordinary documents for no security benefit.
+func TestUnparseableFrontmatterWithoutPolicyStaysOpen(t *testing.T) {
+	d := t.TempDir()
+	write(t, d, "s.md", "---\nstatus: [\n---\n# S\n\nThe permissions: section is prose.\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := w.Pages["s.md"]
+	if p.Restricted || !w.Allowed("nobody", p, Read) {
+		t.Fatal("a parse error without a policy must not hide the file")
+	}
+	if !problem(w, "s.md", "invalid YAML") {
+		t.Fatalf("problems = %#v", w.Problems)
+	}
+}
+
+// Editors on some platforms write a UTF-8 byte order mark. The frontmatter
+// behind it used to be read as body, silently dropping type and access policy.
+func TestByteOrderMarkFrontmatter(t *testing.T) {
+	d := t.TempDir()
+	write(t, d, "alice.md", "\ufeff---\ntype: identity\n---\n# Alice\n")
+	write(t, d, "secret.md", "\ufeff---\r\npermissions:\r\n  read: alice\r\n---\r\n# Secret\r\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Pages["alice.md"].Kind != Identity {
+		t.Fatal("BOM hid the identity type")
+	}
+	p := w.Pages["secret.md"]
+	if !p.Restricted || w.Allowed("nobody", p, Read) {
+		t.Fatal("BOM-prefixed policy ignored; file is open to everyone")
+	}
+	if !w.Allowed("alice", p, Read) {
+		t.Fatal("BOM-prefixed grant not honoured")
+	}
+	if p.Title != "Secret" || strings.Contains(p.Body, "permissions") {
+		t.Fatalf("body = %q", p.Body)
+	}
+}
+
+// A first line that merely starts with dashes is a thematic break, not an
+// unterminated frontmatter block.
+func TestLongThematicBreakIsNotFrontmatter(t *testing.T) {
+	d := t.TempDir()
+	write(t, d, "x.md", "-----\n# X\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(w.Problems) != 0 {
+		t.Fatalf("problems = %#v", w.Problems)
+	}
+}
+
+// Fenced code documents syntax; mentions in it address nobody, and a closing
+// fence must use the same marker as the opening one.
+func TestFencesAndInlineCodeHideReferences(t *testing.T) {
+	d := t.TempDir()
+	write(t, d, "t.md", "# T\n")
+	write(t, d, "g.md", "# G\n\n~~~\n```\n[[t]]\n~~~\n\n````\n```\n[[t]]\n````\n\n``a [[t]] b``\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.Pages["g.md"].Links; len(got) != 0 {
+		t.Fatalf("links inside code = %#v", got)
+	}
+}
+
+func TestReferenceAliasAndPathResolution(t *testing.T) {
+	d := t.TempDir()
+	write(t, d, "docs/design.md", "# Design\n")
+	write(t, d, "a.md", "# A\n[[design|the design]] and ![[docs/design.md]] and [[ ]] and [[design]]\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := w.Pages["a.md"]
+	if len(a.Links) != 2 || a.Links[0] != "design" || len(a.Embeds) != 1 {
+		t.Fatalf("links=%#v embeds=%#v", a.Links, a.Embeds)
+	}
+	if got := w.Pages["docs/design.md"].Backlinks; len(got) != 1 || got[0] != "a.md" {
+		t.Fatalf("backlinks must be deduplicated: %#v", got)
+	}
+	for _, ref := range []string{"design", "docs/design", "docs/design.md", " design "} {
+		if _, ok := w.Resolve(ref); !ok {
+			t.Fatalf("Resolve(%q) failed", ref)
+		}
+	}
+	for _, ref := range []string{"", ".md", "../design"} {
+		if _, ok := w.Resolve(ref); ok {
+			t.Fatalf("Resolve(%q) succeeded", ref)
+		}
+	}
+}
+
+func TestMalformedIdentityMembersReported(t *testing.T) {
+	d := t.TempDir()
+	write(t, d, "g.md", "---\ntype: identity\nmembers: {a: b}\n---\n")
+	write(t, d, "h.md", "---\ntype: identity\nmembers: [alice, 3]\n---\n")
+	write(t, d, "i.md", "---\ntype: identity\nmembers: [ghost]\n---\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"g.md", "h.md"} {
+		if !problem(w, p, "members must name") {
+			t.Fatalf("%s: problems = %#v", p, w.Problems)
+		}
+	}
+	if !problem(w, "i.md", `unresolved identity member "ghost"`) {
+		t.Fatalf("problems = %#v", w.Problems)
+	}
+	if err := w.Validate(); err == nil {
+		t.Fatal("Validate missed problems")
+	}
+}
+
+func TestNonMappingFrontmatterReported(t *testing.T) {
+	d := t.TempDir()
+	write(t, d, "x.md", "---\n- a\n- b\n---\n# X\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !problem(w, "x.md", "must be a YAML mapping") {
+		t.Fatalf("problems = %#v", w.Problems)
+	}
+}

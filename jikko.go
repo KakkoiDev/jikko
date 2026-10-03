@@ -158,19 +158,29 @@ func parseFile(fullPath, rel string, d fs.DirEntry) (*Page, []Problem) {
 
 	front, body, hasFront := splitFrontmatter(raw)
 	p.Body = string(body)
-	if !hasFront && bytes.HasPrefix(raw, []byte("---")) {
+	// policyUnreadable is set when metadata could not be read but appears to
+	// carry an access policy. Such a policy is unreadable, not absent.
+	policyUnreadable := false
+	if !hasFront && opensFrontmatter(raw) {
 		add(ProblemParse, `frontmatter opens with "---" but no closing "---" line was found; all metadata was ignored`)
+		policyUnreadable = policyKeyPattern.Match(raw)
 	}
 	if hasFront && len(bytes.TrimSpace(front)) > 0 {
 		var doc yaml.Node
 		if err := yaml.Unmarshal(front, &doc); err != nil {
 			add(ProblemParse, "invalid YAML frontmatter: %v", err)
+			policyUnreadable = policyKeyPattern.Match(front)
 		} else if m := mappingOf(&doc); m == nil {
 			add(ProblemParse, "frontmatter must be a YAML mapping")
 		} else if err := m.Decode(&p.Metadata); err != nil {
 			add(ProblemParse, "invalid YAML frontmatter: %v", err)
 			p.Metadata = map[string]any{}
+			policyUnreadable = hasMappingKey(m, "permissions")
 		}
+	}
+	if policyUnreadable {
+		p.Restricted, p.aclUsable = true, false
+		add(ProblemPermissions, "frontmatter could not be parsed and appears to carry a permissions policy, so the file is denied to everyone")
 	}
 
 	if raw, ok := p.Metadata["type"]; ok {
@@ -226,13 +236,40 @@ func mappingOf(n *yaml.Node) *yaml.Node {
 	return n
 }
 
-var fence = []byte("---")
+// hasMappingKey reports whether a YAML mapping node carries key at its top level.
+func hasMappingKey(m *yaml.Node, key string) bool {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return true
+		}
+	}
+	return false
+}
+
+// policyKeyPattern recognises a top-level-looking `permissions:` key in text
+// that YAML could not parse, so a broken policy fails closed instead of open.
+var policyKeyPattern = regexp.MustCompile(`(?m)^[ \t{]*["']?permissions["']?[ \t]*:`)
+
+var (
+	fence = []byte("---")
+	// bom is the UTF-8 byte order mark some editors write at the start of a file.
+	bom = []byte("\xef\xbb\xbf")
+)
+
+// opensFrontmatter reports whether the first line of src, after any byte order
+// mark, is exactly the "---" frontmatter delimiter.
+func opensFrontmatter(src []byte) bool {
+	first, _, _ := bytes.Cut(bytes.TrimPrefix(src, bom), []byte("\n"))
+	return bytes.Equal(bytes.TrimSuffix(first, []byte("\r")), fence)
+}
 
 // splitFrontmatter separates a YAML frontmatter block from the body. Both the
 // opening and the closing delimiter must be a line containing exactly "---".
-// LF and CRLF files are both accepted and the body is returned byte-exact.
+// LF and CRLF files are both accepted and the body is returned byte-exact. A
+// leading UTF-8 byte order mark is not content: ignoring the frontmatter behind
+// it would silently drop the file's type and access policy.
 func splitFrontmatter(src []byte) (front, body []byte, ok bool) {
-	first, rest, found := bytes.Cut(src, []byte("\n"))
+	first, rest, found := bytes.Cut(bytes.TrimPrefix(src, bom), []byte("\n"))
 	if !found || !bytes.Equal(bytes.TrimSuffix(first, []byte("\r")), fence) {
 		return nil, src, false
 	}
