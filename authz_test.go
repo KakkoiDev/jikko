@@ -428,3 +428,37 @@ func TestCapabilityHierarchyAndAdditiveGrants(t *testing.T) {
 		t.Fatal("missing group accepted")
 	}
 }
+
+// A credential id names one credential: it re-checks while the credential is
+// stored, fails once it is revoked, and is not itself a bearer token.
+func TestCredentialIdentityFollowsRevocation(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+	w, err := Open(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := w.CreateCredential("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, id, err := w.AuthenticateCredential(token)
+	if err != nil || p.Path != "alice.md" || id == "" || strings.Contains(id, token) {
+		t.Fatalf("AuthenticateCredential = %v %q %v", p, id, err)
+	}
+	if p, err := w.CredentialIdentity(id); err != nil || p.Path != "alice.md" {
+		t.Fatalf("CredentialIdentity = %v %v", p, err)
+	}
+	if _, err := w.Authenticate(id); !errors.Is(err, ErrAuthentication) {
+		t.Fatal("a credential id authenticated as a token")
+	}
+	if _, err := w.CredentialIdentity(""); !errors.Is(err, ErrAuthentication) {
+		t.Fatal("empty credential id accepted")
+	}
+	if err := w.RevokeCredentials("alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.CredentialIdentity(id); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("revoked credential re-checked as valid: %v", err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	jikko "github.com/KakkoiDev/jikko"
 )
 
 func workspace(t *testing.T, files map[string]string) string {
@@ -151,26 +154,42 @@ func TestLoginExchangesTokenForSession(t *testing.T) {
 
 func TestSessionExpiry(t *testing.T) {
 	s := newSessionStore()
-	id, err := s.create("alice")
+	id, err := s.create("alice", "cred")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.identity(id) != "alice" {
-		t.Fatal("fresh session not recognised")
+	if e, ok := s.lookup(id); !ok || e.identity != "alice" || e.credential != "cred" {
+		t.Fatalf("fresh session = %#v %v", e, ok)
 	}
 	s.mu.Lock()
 	s.m[id] = sessionEntry{identity: "alice", expires: time.Now().Add(-time.Second)}
 	s.mu.Unlock()
-	if s.identity(id) != "" {
-		t.Fatal("expired session accepted")
+	s.touch(id)
+	if _, ok := s.lookup(id); ok {
+		t.Fatal("expired session accepted or revived")
 	}
-	id2, _ := s.create("bob")
+	id2, _ := s.create("bob", "cred")
 	s.drop(id2)
-	if s.identity(id2) != "" {
+	if _, ok := s.lookup(id2); ok {
 		t.Fatal("dropped session accepted")
 	}
-	if s.identity("") != "" {
+	if _, ok := s.lookup(""); ok {
 		t.Fatal("empty session id accepted")
+	}
+
+	// lookup leaves the expiry alone; touch slides it.
+	id3, _ := s.create("carol", "cred")
+	s.mu.Lock()
+	e := s.m[id3]
+	e.expires = time.Now().Add(time.Minute)
+	s.m[id3] = e
+	s.mu.Unlock()
+	if got, _ := s.lookup(id3); !got.expires.Equal(e.expires) {
+		t.Fatal("lookup extended the session")
+	}
+	s.touch(id3)
+	if got, _ := s.lookup(id3); !got.expires.After(e.expires) {
+		t.Fatal("touch did not extend the session")
 	}
 }
 
@@ -377,7 +396,7 @@ func TestLogoutEndsTheSession(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("cross-site logout = %d", rec.Code)
 	}
-	if s.sessions.identity(c.Value) != "alice" {
+	if e, ok := s.sessions.lookup(c.Value); !ok || e.identity != "alice" {
 		t.Fatal("cross-site request ended the session")
 	}
 
@@ -417,11 +436,10 @@ func TestSessionFollowsIdentityChanges(t *testing.T) {
 	}
 }
 
-// Revoking a credential does not end browser sessions created from it, so a
-// leaked token keeps working through its session for up to sessionTTL -- and
-// indefinitely while a live event stream keeps sliding the expiry forward.
+// A session is bound to the credential it was created from. Revoking that
+// credential ends the session on its next request, for good: creating a new
+// credential for the same identity does not revive it.
 func TestRevokedCredentialEndsSessions(t *testing.T) {
-	t.Skip("known gap: sessions are not bound to the credential that created them; see audit report")
 	s, h, _, token := teamServer(t)
 	c := loggedIn(t, h, token)
 	ws, err := s.cache.load()
@@ -431,8 +449,135 @@ func TestRevokedCredentialEndsSessions(t *testing.T) {
 	if err := ws.RevokeCredentials("alice"); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(getWith(h, "/pages", func(r *http.Request) { r.AddCookie(c) }).Body.String(), "Secret") {
+	withCookie := func(r *http.Request) { r.AddCookie(c) }
+	if strings.Contains(getWith(h, "/pages", withCookie).Body.String(), "Secret") {
 		t.Fatal("session outlived its revoked credential")
+	}
+	if _, ok := s.sessions.lookup(c.Value); ok {
+		t.Fatal("session of a revoked credential was kept")
+	}
+	if _, err := ws.CreateCredential("alice"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(getWith(h, "/pages", withCookie).Body.String(), "Secret") {
+		t.Fatal("a new credential revived an ended session")
+	}
+}
+
+// Another credential of the same identity keeps its own sessions.
+func TestRevocationIsPerCredentialSession(t *testing.T) {
+	s, h, dir, token := teamServer(t)
+	ws, err := s.cache.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := ws.CreateCredential("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1, c2 := loggedIn(t, h, token), loggedIn(t, h, other)
+	// Drop only the first credential, by hand, as an operator editing
+	// .auth.md would.
+	a, err := jikko.LoadAuth(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := a.Credentials[1:]
+	var b strings.Builder
+	b.WriteString("---\ncredentials:\n")
+	for _, cred := range kept {
+		fmt.Fprintf(&b, "  - identity: %s\n    token_hash: %s\n", cred.Identity, cred.TokenHash)
+	}
+	b.WriteString("---\n")
+	if err := os.WriteFile(filepath.Join(dir, ".auth.md"), []byte(b.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(getWith(h, "/pages", func(r *http.Request) { r.AddCookie(c1) }).Body.String(), "Secret") {
+		t.Fatal("session of the removed credential survived")
+	}
+	if !strings.Contains(getWith(h, "/pages", func(r *http.Request) { r.AddCookie(c2) }).Body.String(), "Secret") {
+		t.Fatal("session of the remaining credential ended")
+	}
+}
+
+// Deleting the identity behind a credential ends its sessions, and they stay
+// ended when an identity of the same name is created again.
+func TestDeletedIdentityEndsSessions(t *testing.T) {
+	s, h, dir, token := teamServer(t)
+	c := loggedIn(t, h, token)
+	withCookie := func(r *http.Request) { r.AddCookie(c) }
+	if err := os.Remove(filepath.Join(dir, "alice.md")); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(getWith(h, "/", withCookie).Body.String(), `action="/logout"`) {
+		t.Fatal("session outlived its identity")
+	}
+	if _, ok := s.sessions.lookup(c.Value); ok {
+		t.Fatal("session of a deleted identity was kept")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "alice.md"), []byte("---\ntype: identity\n---\n# Alice again\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(getWith(h, "/pages", withCookie).Body.String(), "Secret") {
+		t.Fatal("ended session revived by a same-named identity")
+	}
+}
+
+// An open event stream re-checks its session: it closes once the credential is
+// revoked, and while it runs it does not slide the session's expiry forward.
+func TestEventStreamEndsWithRevokedCredential(t *testing.T) {
+	s, h, _, token := teamServer(t)
+	c := loggedIn(t, h, token)
+	before, ok := s.sessions.lookup(c.Value)
+	if !ok {
+		t.Fatal("no session")
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(c)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	time.Sleep(2500 * time.Millisecond) // a few stream ticks
+	after, ok := s.sessions.lookup(c.Value)
+	if !ok {
+		t.Fatal("session ended while its credential stood")
+	}
+	if !after.expires.Equal(before.expires) {
+		t.Fatal("the event stream extended the session")
+	}
+
+	ws, err := s.cache.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.RevokeCredentials("alice"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, resp.Body)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("stream ended with %v, want a clean close", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("event stream stayed open after its credential was revoked")
+	}
+	if _, ok := s.sessions.lookup(c.Value); ok {
+		t.Fatal("session of a revoked credential was kept")
 	}
 }
 
