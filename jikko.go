@@ -111,7 +111,9 @@ func Open(root string) (*Workspace, error) {
 			}
 			return nil
 		}
-		if d.Name() == ".auth.md" {
+		// Compared without case: on a case-insensitive filesystem LoadAuth
+		// reads .AUTH.md as the credential file, so it must never be a page.
+		if strings.EqualFold(d.Name(), ".auth.md") {
 			return nil
 		}
 		if !strings.EqualFold(filepath.Ext(p), ".md") {
