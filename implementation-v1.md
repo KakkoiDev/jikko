@@ -39,7 +39,7 @@ The next runtime layer must enforce the documented work model without adding pag
 
 - deterministic validation available to CLI/JSON and browser;
 - structured Task mutations for status, responsibility, dependencies, blockers, and progress;
-- semantic comment/reply/resolve operations for durable discussion;
+- semantic comment/reply/resolve operations for durable discussion (implemented: `jikko comment`, specification §8.1);
 - proof references through ordinary links, embeds, commits, tests, measurements, files, external references, or approval;
 - warnings or rejection for completion when configured requirements remain unmet;
 - actor-attributed logical mutations and Git-backed audit history;

@@ -79,7 +79,9 @@ func (w *Workspace) Mentions(actor string) []*Page {
 			continue
 		}
 		found := false
-		scanProse(p.Body, func(line string) {
+		// "@name:" in front of a comment message attributes it; it is not a
+		// request for that identity's attention.
+		scanProse(blankCommentAuthors(p.Body), func(line string) {
 			if found {
 				return
 			}

@@ -424,3 +424,98 @@ func TestFlagErrors(t *testing.T) {
 		t.Fatal("serve accepted a stray argument")
 	}
 }
+
+func TestCommentCommands(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+
+	id := strings.TrimSpace(mustCLI(t, comment, "add", "open", "please look", "Looking now.", "--dir", dir, "--token", bobToken))
+	if id != "c1" {
+		t.Fatalf("id = %q", id)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "open.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "<!--comment:c1-->please look<!--/comment:c1-->") || !strings.Contains(string(b), "<!--comment-thread:c1\n@bob: Looking now.\n-->") {
+		t.Fatalf("open.md = %q", b)
+	}
+	mustCLI(t, comment, "reply", "open", "c1", "Thanks.", "--dir", dir, "--token", aliceToken)
+
+	// bob may read secret.md but not comment on it.
+	if _, _, err := cli(t, comment, "add", "secret", "Classified", "Why?", "--dir", dir, "--token", bobToken); err == nil {
+		t.Fatal("a reader commented")
+	}
+	if _, _, err := cli(t, comment, "add", "open", "See", "x", "--dir", dir); err == nil {
+		t.Fatal("an anonymous caller commented")
+	}
+	var added map[string]string
+	out := mustCLI(t, comment, "add", "secret", "Classified", "Why?", "--dir", dir, "--token", aliceToken, "--json")
+	if err := json.Unmarshal([]byte(out), &added); err != nil || added["id"] != "c1" {
+		t.Fatalf("add --json = %q", out)
+	}
+
+	// Listing is filtered by read permission.
+	anonymous := mustCLI(t, comment, "list", "--dir", dir)
+	if !strings.Contains(anonymous, "open.md#c1") || !strings.Contains(anonymous, "@alice: Thanks.") || strings.Contains(anonymous, "secret.md") {
+		t.Fatalf("anonymous list:\n%s", anonymous)
+	}
+	var listed []struct {
+		ID, Path string
+		Entries  []struct{ Author, Text string }
+	}
+	out = mustCLI(t, comment, "list", "secret", "--dir", dir, "--token", bobToken, "--json")
+	if err := json.Unmarshal([]byte(out), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Path != "secret.md" || listed[0].Entries[0].Author != "alice" {
+		t.Fatalf("filtered list = %s", out)
+	}
+	if _, _, err := cli(t, comment, "list", "secret", "--dir", dir); err == nil {
+		t.Fatal("anonymous listing of a restricted page")
+	}
+
+	if _, _, err := cli(t, comment, "resolve", "secret", "c1", "--dir", dir, "--token", bobToken); err == nil {
+		t.Fatal("a reader resolved")
+	}
+	mustCLI(t, comment, "resolve", "open", "c1", "--dir", dir, "--token", bobToken)
+	if b, _ := os.ReadFile(filepath.Join(dir, "open.md")); string(b) != "# Open\n\nSee [[tasks/ship]]. @crew please look.\n" {
+		t.Fatalf("resolved open.md = %q", b)
+	}
+
+	for _, args := range [][]string{{}, {"bogus"}, {"add", "open"}, {"resolve", "open"}, {"list", "a", "b"}} {
+		if _, _, err := cli(t, comment, append(args, "--dir", dir, "--token", aliceToken)...); err == nil {
+			t.Fatalf("%v accepted", args)
+		}
+	}
+}
+
+// A Task marked done with unresolved comments warns on set and in check, but
+// neither refuses it.
+func TestDoneTaskWithCommentsWarns(t *testing.T) {
+	dir, aliceToken, _ := team(t)
+	mustCLI(t, comment, "add", "tasks/ship", "Ship it", "Tests first?", "--dir", dir, "--token", aliceToken)
+	_, errOut, err := cli(t, set, "tasks/ship", "status", "done", "--dir", dir, "--token", aliceToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "warning: tasks/ship.md: task is done but has 1 unresolved comment(s)") {
+		t.Fatalf("set stderr = %q", errOut)
+	}
+	out, _, err := cli(t, check, "--dir", dir)
+	if err != nil {
+		t.Fatalf("a warning failed check: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "tasks/ship.md: warning: [review]") {
+		t.Fatalf("check output:\n%s", out)
+	}
+	var report struct {
+		Warnings []struct{ Path string } `json:"warnings"`
+	}
+	out = mustCLI(t, check, "--dir", dir, "--json")
+	if err := json.Unmarshal([]byte(out), &report); err != nil || len(report.Warnings) != 1 {
+		t.Fatalf("check --json = %q", out)
+	}
+	if out := mustCLI(t, show, "tasks/ship", "--dir", dir); !strings.HasPrefix(out, "Ship it\n") {
+		t.Fatalf("title kept the markers: %q", out)
+	}
+}

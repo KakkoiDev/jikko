@@ -68,6 +68,8 @@ type Page struct {
 	Embeds    []string       `json:"embeds,omitempty"`
 	Backlinks []string       `json:"backlinks,omitempty"`
 	Members   []string       `json:"members,omitempty"`
+	// Comments are the page's unresolved inline comments.
+	Comments []CommentThread `json:"comments,omitempty"`
 
 	// Restricted reports whether the file carries a `permissions` mapping.
 	// Jikko imposes no restriction on a file without one.
@@ -221,6 +223,9 @@ func parseSource(rel string, raw []byte, symlink bool) (*Page, []Problem) {
 		}
 	}
 	p.Title = titleOf(p.Body, rel)
+	comments, commentProblems := parseComments(rel, p.Body)
+	p.Comments = comments
+	problems = append(problems, commentProblems...)
 	p.Links, p.Embeds = refsIn(p.Body)
 
 	if p.Kind == View && strings.TrimSpace(p.Body) != "" {
@@ -399,7 +404,7 @@ func titleOf(body, pagePath string) string {
 	title := ""
 	scanProse(body, func(line string) {
 		if title == "" && strings.HasPrefix(line, "# ") {
-			title = strings.TrimSpace(strings.TrimPrefix(line, "# "))
+			title = strings.TrimSpace(stripCommentMarkers(strings.TrimPrefix(line, "# ")))
 		}
 	})
 	if title != "" {

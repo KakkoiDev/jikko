@@ -228,6 +228,19 @@ Resolving a comment removes its active markers/thread from current Markdown afte
 
 Current Markdown therefore contains current unresolved discussion; Git contains historical discussion.
 
+### 8.1 Reference harness reading
+
+Where this section leaves room, the reference harness takes the simplest reading. These choices are provisional with the serialization itself:
+
+- **Scope of an id.** Comment ids are unique within one file, not across the workspace. The harness assigns `c<n>`, one above the highest numbered id in the file, so the id of a resolved comment may be used again later; Git history disambiguates.
+- **One anchor, one thread.** Every comment has exactly one anchor (`<!--comment:ID-->…<!--/comment:ID-->`) and exactly one thread (`<!--comment-thread:ID` … `-->`). There are no page-level comments without an anchor. A thread without an anchor is reported as orphaned discussion, and so is an anchor without a thread, an anchor that never ends, and an id used twice. These are workspace problems, so a mutation that would create one, such as deleting commented text, is rejected.
+- **Anchors.** `jikko comment add` anchors on an excerpt that occurs exactly once in the page's prose, on one line, outside code, without splitting a `[[reference]]`.
+- **Thread placement.** A new thread goes after the paragraph that holds its anchor, separated by blank lines, or at the end of the body.
+- **Messages.** Each message is one paragraph that starts `@<identity>: `, written by the harness from the authenticated actor. Messages are separated by blank lines, so a message cannot contain one, nor a code fence, nor `<!--`, `-->`, or `--!>`. The attributing `@<identity>:` is not a mention; an `@mention` inside a message is.
+- **Code is documentation.** Comment syntax inside fenced code blocks or inline code is not a comment.
+- **Who may resolve.** Resolving needs the `comment` capability, as [permission-semantics-v1.md](permission-semantics-v1.md) states. Resolving removes the anchor markers, keeping the text they surround, and the whole thread.
+- **Completing a Task.** A Task whose `status` is `done` while it has comments is reported by `jikko check` as a warning that does not fail the check, and `jikko set` prints the same warning. Neither refuses the change.
+
 ## 9. Identity, mentions, assignment, and notifications
 
 Canonical mention syntax is source-native:

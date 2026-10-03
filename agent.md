@@ -123,6 +123,17 @@ This should <!--comment:c17-->update references<!--/comment:c17-->.
 
 The exact serialization is not frozen until parser compatibility is tested. Resolving a comment removes active markup/thread after incorporating the decision; Git retains historical discussion. Do not silently delete or orphan unresolved comments.
 
+Use the semantic operations rather than writing the markup by hand. They need only the `comment` capability:
+
+```sh
+jikko comment add design 'update references' 'Should normal links update too?'
+jikko comment reply design c17 'Yes, links and embeds.'
+jikko comment resolve design c17
+jikko comment list [design] --json
+```
+
+`jikko check` warns about a Task marked done while comments remain unresolved. See specification §8.1 for the details of the serialization.
+
 ## Go harness and mutations
 
 The Go core owns parsing, indexing, reference resolution, backlinks, identity membership, mentions, authorization, queries, safe mutations, uploads, rename rewriting, comments, and conflict semantics. CLI and HTTP are adapters.

@@ -121,7 +121,7 @@ jikko export --dir /path/to/workspace --output workspace.zip
 
 The ZIP contains source and assets but deliberately excludes Git internals, derived `.data`, and credentials in `.auth.md`. The browser API can produce/download the same ZIP. See [browser/README.md](browser/README.md).
 
-> **Current limitation:** the implementation can inspect, mutate, and serve a workspace, but the source-first browser editor, comments/mentions/identity collaboration, automatic Git transaction/merge integration, uploads, media embeds, Mermaid, and semantic rename are roadmap work.
+> **Current limitation:** the implementation can inspect, mutate, comment on, and serve a workspace, but the source-first browser editor, browser comment sidebar, automatic Git transaction/merge integration, uploads, media embeds, Mermaid, and semantic rename are roadmap work.
 
 ## Agent workspace operations
 
@@ -133,6 +133,8 @@ jikko show identity/cassian strategy/current intelligence/malrec --dir /path/to/
 jikko mentions --dir /path/to/workspace --json
 jikko create memory/talos --dir /path/to/workspace --body '# Talos\nNever forget.'
 jikko create tasks/defend-sol --dir /path/to/workspace --type task --body '# Defend Sol'
+jikko comment add tasks/defend-sol 'Defend Sol' 'Which fleet?' --dir /path/to/workspace
+jikko comment list --dir /path/to/workspace --json
 ```
 
 `tree` never includes pages the authenticated identity cannot read, so it does not disclose forbidden paths. `show` accepts one or many references for efficient batch retrieval. `mentions` derives direct and transitive group mentions from Markdown; no duplicate inbox is stored. Creation remains source-first Markdown and is validated before the workspace is refreshed.

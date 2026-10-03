@@ -16,6 +16,7 @@ var commands = map[string]func([]string) error{
 	"list": list, "show": show, "auth": auth, "set": set,
 	"perm": perm, "serve": serve, "check": check,
 	"tree": tree, "mentions": mentions, "create": create, "commit": commit, "export": exportWorkspace,
+	"comment": comment,
 }
 
 func main() {
@@ -50,6 +51,7 @@ func usage() {
   export  export a portable workspace ZIP
   set     set a metadata property
   perm    grant or clear a capability on a page
+  comment add, reply to, resolve, or list inline comments
   auth    create or revoke a credential
   check   report workspace problems and broken references
   serve   serve the workspace over HTTP
@@ -217,7 +219,108 @@ func set(args []string) error {
 	if actor == "" {
 		return errors.New("authentication required: pass --token or set JIKKO_TOKEN")
 	}
-	return w.SetMetadata(actor, args[0], args[1], args[2])
+	if err := w.SetMetadata(actor, args[0], args[1], args[2]); err != nil {
+		return err
+	}
+	warnUnresolved(w, args[0])
+	return nil
+}
+
+// warnUnresolved notes, without failing, that a Task now marked done still has
+// unresolved comments. The specification asks for a warning, not a refusal.
+func warnUnresolved(w *jikko.Workspace, ref string) {
+	p, ok := w.Resolve(ref)
+	if !ok {
+		return
+	}
+	for _, warning := range w.UnresolvedCommentWarnings() {
+		if warning.Path == p.Path {
+			fmt.Fprintf(os.Stderr, "jikko: warning: %s: %s\n", warning.Path, warning.Message)
+		}
+	}
+}
+
+const commentUsage = `usage:
+  jikko comment add [flags] <reference> <anchor text> <message>
+  jikko comment reply [flags] <reference> <id> <message>
+  jikko comment resolve [flags] <reference> <id>
+  jikko comment list [flags] [reference]`
+
+func comment(args []string) error {
+	var asJSON *bool
+	args, dir, token, err := flags("comment", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
+	if err != nil {
+		return err
+	}
+	if len(args) == 0 {
+		return errors.New(commentUsage)
+	}
+	op, args := args[0], args[1:]
+	arity := map[string]int{"add": 3, "reply": 3, "resolve": 2}
+	if n, known := arity[op]; (known && len(args) != n) || (!known && (op != "list" || len(args) > 1)) {
+		return errors.New(commentUsage)
+	}
+	w, err := openWorkspace(*dir)
+	if err != nil {
+		return err
+	}
+	actor, err := actorFor(w, *token)
+	if err != nil {
+		return err
+	}
+	if op == "list" {
+		return listComments(w, actor, args, *asJSON)
+	}
+	if actor == "" {
+		return errors.New("authentication required: pass --token or set JIKKO_TOKEN")
+	}
+	switch op {
+	case "add":
+		id, err := w.AddComment(actor, args[0], args[1], args[2])
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return json.NewEncoder(os.Stdout).Encode(map[string]string{"id": id})
+		}
+		fmt.Println(id)
+		return nil
+	case "reply":
+		return w.ReplyComment(actor, args[0], args[1], args[2])
+	default:
+		return w.ResolveComment(actor, args[0], args[1])
+	}
+}
+
+func listComments(w *jikko.Workspace, actor string, args []string, asJSON bool) error {
+	comments := w.Comments(actor)
+	if len(args) == 1 {
+		pages, err := w.ReadMany(actor, args[0])
+		if err != nil {
+			return err
+		}
+		kept := comments[:0]
+		for _, c := range comments {
+			if c.Path == pages[0].Path {
+				kept = append(kept, c)
+			}
+		}
+		comments = kept
+	}
+	if asJSON {
+		return json.NewEncoder(os.Stdout).Encode(comments)
+	}
+	for _, c := range comments {
+		fmt.Printf("%s#%s %q\n", c.Path, c.ID, c.Anchor)
+		for _, e := range c.Entries {
+			author := e.Author
+			if author == "" {
+				author = "?"
+			}
+			fmt.Printf("  @%s: %s\n", author, strings.ReplaceAll(e.Text, "\n", "\n    "))
+		}
+	}
+	return nil
 }
 
 func perm(args []string) error {
@@ -294,16 +397,26 @@ func check(args []string) error {
 			}
 		}
 	}
+	warnings := w.UnresolvedCommentWarnings()
+	if warnings == nil {
+		warnings = []jikko.Problem{}
+	}
 	if *asJSON {
 		if err := json.NewEncoder(os.Stdout).Encode(struct {
 			Pages    int             `json:"pages"`
 			Problems []jikko.Problem `json:"problems"`
-		}{len(w.Pages), problems}); err != nil {
+			Warnings []jikko.Problem `json:"warnings"`
+		}{len(w.Pages), problems, warnings}); err != nil {
 			return err
 		}
 	} else {
 		for _, p := range problems {
 			fmt.Printf("%s: [%s] %s\n", p.Path, p.Kind, p.Message)
+		}
+		// Warnings do not fail the check: completing a Task with open
+		// discussion is allowed, only surfaced.
+		for _, p := range warnings {
+			fmt.Printf("%s: warning: [%s] %s\n", p.Path, p.Kind, p.Message)
 		}
 	}
 	if len(problems) > 0 {
