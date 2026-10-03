@@ -96,6 +96,22 @@ a change is rejected if it introduces a workspace problem, widens anyone's
 access beyond what you may administer, or leaves a restricted file with no
 administrator.
 
+Pages are renamed and deleted through Jikko so references stay intact:
+
+```sh
+go run ./cmd/jikko rename session-design architecture/sessions --dir /path/to/workspace
+go run ./cmd/jikko rename session-design old --no-rewrite --dir /path/to/workspace
+go run ./cmd/jikko delete old-notes --dir /path/to/workspace
+go run ./cmd/jikko delete former-member --prune --dir /path/to/workspace
+```
+
+`rename` rewrites every `[[link]]`, `![[embed]]`, and, for an identity, every
+group membership, access policy, assignee, and `@mention` that pointed at the
+page, and reports references whose meaning changes. `--no-rewrite` only moves
+the file and lists what breaks. `delete` refuses to drop an identity that a
+group or an access policy names unless `--prune` removes those entries, and
+reports links it leaves dangling.
+
 `check` reports unresolved references together with workspace problems —
 malformed frontmatter, unknown types, views carrying a body, membership cycles,
 and access policies naming identities that do not resolve. A problem is
@@ -121,7 +137,7 @@ jikko export --dir /path/to/workspace --output workspace.zip
 
 The ZIP contains source and assets but deliberately excludes Git internals, derived `.data`, and credentials in `.auth.md`. The browser API can produce/download the same ZIP. See [browser/README.md](browser/README.md).
 
-> **Current limitation:** the implementation can inspect, mutate, comment on, and serve a workspace, but the source-first browser editor, browser comment sidebar, automatic Git transaction/merge integration, uploads, media embeds, Mermaid, and semantic rename are roadmap work.
+> **Current limitation:** the implementation can inspect, mutate, comment on, and serve a workspace, but the source-first browser editor, browser comment sidebar, automatic Git transaction/merge integration, uploads, media embeds, and Mermaid are roadmap work.
 
 ## Agent workspace operations
 

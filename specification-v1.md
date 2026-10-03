@@ -196,6 +196,18 @@ External renames cannot always be inferred safely. `jikko check` MUST report bro
 
 Backlinks remain derived data.
 
+### 7.1 Reference harness reading
+
+The reference harness implements rename and deletion as `jikko rename <reference> <new path> [--no-rewrite]` and `jikko delete <reference> [--prune]`. Where this section leaves room it takes the simplest safe reading:
+
+- **What is a reference.** `[[links]]` and `![[embeds]]` in prose (never in code), `@mentions` and comment attributions, and the reference-valued frontmatter keys: `members`, `assignee`, the subjects of `permissions`, and the work-model keys `depends_on`, `blocked_by`, and `proof`.
+- **Same target afterwards.** A rename rewrites every reference that resolved before so that it resolves to the same page or file afterwards. That includes references to *other* pages that the move would make ambiguous, which are rewritten to their full path, and relative asset embeds in the moved page, which are rewritten from the workspace root. A rewritten reference keeps its style: a bare name stays bare when the new bare name is unambiguous, a `.md` suffix and an `|alias` are kept. A rename that would leave some page addressable by no reference at all is refused.
+- **Meaning changes are reported.** A reference that resolved to nothing and would start resolving is reported as captured. With `--no-rewrite`, references that would stop resolving are reported as broken.
+- **Authority.** A rename needs `write` on the page. Rewriting a reference in another page is an edit of that page and needs `write` on it, and `admin` where its `permissions` change. A rename that cannot make every rewrite is refused as a whole, naming the readable pages in the way and counting the unreadable ones, rather than half done. A no-rewrite rename is still refused if it would break a membership or an access policy.
+- **Identity credentials follow a renamed Identity,** so its tokens keep working and a new Identity given the old name cannot claim them. Browser sessions bound to the old name end. Credentials of a deleted Identity are revoked.
+- **Deletion** needs `write`. It is refused while the page has unresolved comments, and, for an Identity named by `members` or `permissions`, unless `--prune` removes those entries; pruning is judged like any other change of membership or policy. Links, embeds, assignees, and mentions of a deleted page are left in place and reported as broken.
+- **Only Markdown pages** are renamed or deleted this way; assets are ordinary files.
+
 ## 8. Inline comments and review
 
 Comments are not a separate core file type. Unresolved comments are authored review state inside the Markdown file being discussed.

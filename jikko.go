@@ -74,13 +74,14 @@ type Page struct {
 	// Restricted reports whether the file carries a `permissions` mapping.
 	// Jikko imposes no restriction on a file without one.
 	Restricted bool `json:"restricted,omitempty"`
+	// Rev fingerprints the bytes this page was parsed from. A caller that
+	// edits a page sends back the revision it read, for optimistic
+	// concurrency control and three-way merge.
+	Rev string `json:"rev"`
 
 	// aclUsable is false when a `permissions` key is present but cannot be
 	// evaluated at all. Such a file is denied to everyone rather than opened.
 	aclUsable bool
-	// rev fingerprints the bytes this page was parsed from, for optimistic
-	// concurrency control on mutation.
-	rev string
 	// symlink marks a page reached through a symbolic link. It is readable
 	// but never written through, so a mutation cannot escape the workspace.
 	symlink bool
@@ -98,14 +99,15 @@ type Workspace struct {
 // defects are collected in Problems and reported by `jikko check`, and any
 // page whose access policy cannot be evaluated is denied to everyone.
 func Open(root string) (*Workspace, error) {
-	return openOverlay(root, nil)
+	return openOverlay(root, nil, nil)
 }
 
 // openOverlay scans a workspace as Open does, but reads the files named in
 // overlay (workspace-relative, slash-separated) from memory instead of disk.
-// An overlay path that does not exist on disk is added as a new page. This
-// lets a mutation judge the workspace it would produce before writing a byte.
-func openOverlay(root string, overlay map[string][]byte) (*Workspace, error) {
+// An overlay path that does not exist on disk is added as a new page, and a
+// path in removed is left out as if deleted. This lets a mutation judge the
+// workspace it would produce before writing a byte.
+func openOverlay(root string, overlay map[string][]byte, removed map[string]bool) (*Workspace, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -134,6 +136,11 @@ func openOverlay(root string, overlay map[string][]byte) (*Workspace, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		if removed[rel] {
+			if _, replaced := overlay[rel]; !replaced {
+				return nil
+			}
+		}
 		var page *Page
 		var problems []Problem
 		if raw, ok := overlay[rel]; ok {
@@ -184,7 +191,7 @@ func parseSource(rel string, raw []byte, symlink bool) (*Page, []Problem) {
 		problems = append(problems, Problem{Path: rel, Kind: kind, Message: fmt.Sprintf(format, args...)})
 	}
 	p := &Page{Path: rel, Kind: Document, Metadata: map[string]any{}, aclUsable: true, symlink: symlink}
-	p.rev = fingerprint(raw)
+	p.Rev = fingerprint(raw)
 
 	front, body, hasFront := splitFrontmatter(raw)
 	p.Body = string(body)

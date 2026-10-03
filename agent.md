@@ -146,7 +146,7 @@ Prefer semantic operations and deterministic `--json`. Direct Markdown edits rem
 
 A mutation should carry authenticated actor context. Do not automatically write `updated_by` into documents. Audit attribution belongs in Git/history unless identity is part of authored meaning.
 
-Rename through Jikko should update safely resolvable `[[links]]` and `![[embeds]]`. Uploads are ordinary workspace files and should use the same core operation from browser and CLI. Respect the configured maximum upload size.
+Rename and delete through Jikko (`jikko rename`, `jikko delete`), never with `mv` or `rm`: rename rewrites safely resolvable `[[links]]`, `![[embeds]]`, memberships, policies, assignees, and mentions, and delete refuses to silently drop an identity that a group or policy names. Uploads are ordinary workspace files and should use the same core operation from browser and CLI. Respect the configured maximum upload size.
 
 ## Concurrency
 

@@ -224,3 +224,46 @@ func (w *Workspace) RevokeCredentials(identity string) error {
 	a.Credentials = kept
 	return saveAuth(w.Root, a)
 }
+
+// moveCredentials rebinds the credentials stored under one identity name to
+// another. The caller holds the workspace lock. A credential left under the
+// old name would authenticate as whichever Identity took that name next.
+func moveCredentials(root, from, to string) error {
+	return editCredentials(root, func(c Credential) (Credential, bool) {
+		if c.Identity == from {
+			c.Identity = to
+		}
+		return c, true
+	})
+}
+
+// dropCredentials removes every credential stored under an identity name.
+// The caller holds the workspace lock.
+func dropCredentials(root, identity string) error {
+	return editCredentials(root, func(c Credential) (Credential, bool) { return c, c.Identity != identity })
+}
+
+// editCredentials rewrites .auth.md through edit, and leaves the file alone
+// when nothing changes or it does not exist.
+func editCredentials(root string, edit func(Credential) (Credential, bool)) error {
+	a, err := LoadAuth(root)
+	if err != nil {
+		return err
+	}
+	changed := false
+	kept := make([]Credential, 0, len(a.Credentials))
+	for _, c := range a.Credentials {
+		next, keep := edit(c)
+		if !keep || next != c {
+			changed = true
+		}
+		if keep {
+			kept = append(kept, next)
+		}
+	}
+	if !changed {
+		return nil
+	}
+	a.Credentials = kept
+	return saveAuth(root, a)
+}

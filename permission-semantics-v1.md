@@ -63,6 +63,8 @@ Renaming an Identity through Jikko MUST update references to that Identity in pe
 
 Deleting an Identity that is referenced by a permission policy MUST NOT silently weaken or broaden access. The semantic delete operation must either update/remove those references explicitly with authorization or reject the deletion and report the inbound ACL references.
 
+The reference harness reads these rules as follows. `jikko rename` rewrites the Identity's name in every `permissions` policy and group `members` list in the same staged operation; rewriting a policy needs `admin` on that file, and the before/after authorization comparison below must find no change, with the renamed Identity compared under its old name. `jikko delete` of an Identity named by a policy or a group is rejected and the references are listed; `jikko delete --prune` removes them instead, needing `write` on each group and `admin` on each policy changed, and is still rejected if it would leave a restricted file with no administrator or raise anyone's access, as emptying a group's `members` can. The credentials of a renamed Identity move with it; those of a deleted Identity are revoked.
+
 ## Authorization-sensitive Identity mutations
 
 Group membership participates in authorization. Therefore a textual `write` grant on an Identity file is not sufficient authority to make every membership change.

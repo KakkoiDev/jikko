@@ -16,7 +16,7 @@ var commands = map[string]func([]string) error{
 	"list": list, "show": show, "auth": auth, "set": set,
 	"perm": perm, "serve": serve, "check": check,
 	"tree": tree, "mentions": mentions, "create": create, "commit": commit, "export": exportWorkspace,
-	"comment": comment,
+	"comment": comment, "rename": rename, "delete": deletePage,
 }
 
 func main() {
@@ -51,6 +51,8 @@ func usage() {
   export  export a portable workspace ZIP
   set     set a metadata property
   perm    grant or clear a capability on a page
+  rename  move a page and rewrite every reference to it
+  delete  delete a page, reporting references it breaks
   comment add, reply to, resolve, or list inline comments
   auth    create or revoke a credential
   check   report workspace problems and broken references
@@ -564,4 +566,98 @@ func exportWorkspace(args []string) error {
 		return err
 	}
 	return os.WriteFile(*output, data, 0644)
+}
+
+func rename(args []string) error {
+	var asJSON, noRewrite *bool
+	args, dir, token, err := flags("rename", args, func(f *flag.FlagSet) {
+		asJSON = f.Bool("json", false, "JSON output")
+		noRewrite = f.Bool("no-rewrite", false, "move the file only and report the references that break")
+	})
+	if err != nil {
+		return err
+	}
+	if len(args) != 2 {
+		return errors.New("usage: jikko rename [flags] <reference> <new path> [--no-rewrite]")
+	}
+	w, actor, err := authenticated(*dir, *token)
+	if err != nil {
+		return err
+	}
+	res, err := w.Rename(actor, args[0], args[1], jikko.RenameOptions{NoRewrite: *noRewrite})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(res)
+	}
+	fmt.Printf("renamed %s -> %s\n", res.From, res.To)
+	for _, c := range res.Rewritten {
+		fmt.Printf("  rewrote %s (%s): %s -> %s\n", c.Path, c.Field, c.From, c.To)
+	}
+	reportRefs("no longer resolves", res.Broken)
+	reportRefs("now resolves to "+res.To, res.Captured)
+	reportHidden(res.Hidden)
+	return nil
+}
+
+func deletePage(args []string) error {
+	var asJSON, prune *bool
+	args, dir, token, err := flags("delete", args, func(f *flag.FlagSet) {
+		asJSON = f.Bool("json", false, "JSON output")
+		prune = f.Bool("prune", false, "remove a deleted identity from group members and access policies")
+	})
+	if err != nil {
+		return err
+	}
+	if len(args) != 1 {
+		return errors.New("usage: jikko delete [flags] <reference> [--prune]")
+	}
+	w, actor, err := authenticated(*dir, *token)
+	if err != nil {
+		return err
+	}
+	res, err := w.Delete(actor, args[0], jikko.DeleteOptions{Prune: *prune})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(res)
+	}
+	fmt.Printf("deleted %s\n", res.Path)
+	for _, c := range res.Pruned {
+		fmt.Printf("  removed %s from %s (%s)\n", c.From, c.Path, c.Field)
+	}
+	reportRefs("no longer resolves", res.Broken)
+	reportRefs("now resolves", res.Captured)
+	reportHidden(res.Hidden)
+	return nil
+}
+
+// authenticated opens a workspace and requires an authenticated caller.
+func authenticated(dir, token string) (*jikko.Workspace, string, error) {
+	w, err := openWorkspace(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	actor, err := actorFor(w, token)
+	if err != nil {
+		return nil, "", err
+	}
+	if actor == "" {
+		return nil, "", errors.New("authentication required: pass --token or set JIKKO_TOKEN")
+	}
+	return w, actor, nil
+}
+
+func reportRefs(what string, changes []jikko.RefChange) {
+	for _, c := range changes {
+		fmt.Fprintf(os.Stderr, "jikko: warning: %s (%s): %q %s\n", c.Path, c.Field, c.From, what)
+	}
+}
+
+func reportHidden(n int) {
+	if n > 0 {
+		fmt.Fprintf(os.Stderr, "jikko: %d affected reference(s) are in pages you cannot read\n", n)
+	}
 }

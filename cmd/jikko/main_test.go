@@ -519,3 +519,62 @@ func TestDoneTaskWithCommentsWarns(t *testing.T) {
 		t.Fatalf("title kept the markers: %q", out)
 	}
 }
+
+func TestRenameCommand(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	if _, _, err := cli(t, rename, "tasks/ship", "tasks/launch", "--dir", dir); err == nil {
+		t.Fatal("anonymous rename accepted")
+	}
+	if _, _, err := cli(t, rename, "tasks/ship", "--dir", dir, "--token", aliceToken); err == nil {
+		t.Fatal("rename without a destination accepted")
+	}
+	// bob may read secret.md but not write it.
+	if _, _, err := cli(t, rename, "secret", "public", "--dir", dir, "--token", bobToken); err == nil {
+		t.Fatal("a reader renamed a page")
+	}
+	out := mustCLI(t, rename, "tasks/ship", "tasks/launch", "--dir", dir, "--token", aliceToken)
+	if !strings.Contains(out, "renamed tasks/ship.md -> tasks/launch.md") || !strings.Contains(out, "rewrote open.md (body): tasks/ship -> tasks/launch") {
+		t.Fatalf("rename output:\n%s", out)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "open.md"))
+	if err != nil || !strings.Contains(string(b), "[[tasks/launch]]") {
+		t.Fatalf("open.md = %q (%v)", b, err)
+	}
+
+	var res struct {
+		From, To string
+		Broken   []struct{ Path, From string }
+	}
+	out = mustCLI(t, rename, "tasks/launch", "tasks/ship", "--no-rewrite", "--json", "--dir", dir, "--token", aliceToken)
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.To != "tasks/ship.md" || len(res.Broken) != 1 || res.Broken[0].Path != "open.md" {
+		t.Fatalf("no-rewrite result = %+v", res)
+	}
+}
+
+func TestDeleteCommand(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	if _, _, err := cli(t, deletePage, "open", "--dir", dir); err == nil {
+		t.Fatal("anonymous delete accepted")
+	}
+	if _, _, err := cli(t, deletePage, "secret", "--dir", dir, "--token", bobToken); err == nil {
+		t.Fatal("a reader deleted a page")
+	}
+	// crew is named by secret.md's policy: refused without --prune.
+	_, errOut, err := cli(t, deletePage, "crew", "--dir", dir, "--token", aliceToken)
+	if err == nil || !strings.Contains(err.Error(), "--prune") {
+		t.Fatalf("delete of a policy identity: %v %s", err, errOut)
+	}
+	_, errOut, err = cli(t, deletePage, "tasks/ship", "--dir", dir, "--token", aliceToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, `open.md (body): "tasks/ship" no longer resolves`) {
+		t.Fatalf("stderr = %q", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tasks/ship.md")); !os.IsNotExist(err) {
+		t.Fatal("page not deleted")
+	}
+}

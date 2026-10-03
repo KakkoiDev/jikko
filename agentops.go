@@ -116,28 +116,8 @@ func (w *Workspace) CreatePage(actor, pagePath, content string) error {
 		return fmt.Errorf("authentication required as an individual identity")
 	}
 	actor = identityRef(person)
-	pagePath = filepath.ToSlash(strings.TrimSpace(pagePath))
-	if filepath.Ext(pagePath) == "" {
-		pagePath += ".md"
-	}
-	if strings.ToLower(filepath.Ext(pagePath)) != ".md" {
-		return fmt.Errorf("Jikko source pages must use .md")
-	}
-	clean := filepath.ToSlash(filepath.Clean(pagePath))
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || filepath.IsAbs(pagePath) {
-		return fmt.Errorf("page path must stay inside the workspace")
-	}
-	if reservedPath(clean) {
-		return fmt.Errorf("%s is reserved for the harness and is not workspace source", clean)
-	}
-	target := filepath.Join(w.Root, filepath.FromSlash(clean))
-	rel, err := filepath.Rel(w.Root, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return fmt.Errorf("page path must stay inside the workspace")
-	}
-	// A directory on the way may be a symbolic link. Resolve the part that
-	// exists before creating anything, so nothing is written outside the root.
-	if err := w.containedDir(filepath.Dir(target)); err != nil {
+	clean, target, err := w.newPagePath(pagePath)
+	if err != nil {
 		return err
 	}
 	if _, err := os.Lstat(target); err == nil {
@@ -145,7 +125,7 @@ func (w *Workspace) CreatePage(actor, pagePath, content string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	return w.stage(actor, "creation", map[string][]byte{clean: []byte(content)}, func(current *Workspace) error {
+	return w.stage(actor, "creation", writes(map[string][]byte{clean: []byte(content)}), func(current *Workspace) error {
 		if _, exists := current.Pages[clean]; exists {
 			return fmt.Errorf("%s already exists", clean)
 		}
@@ -159,6 +139,38 @@ func (w *Workspace) CreatePage(actor, pagePath, content string) error {
 		}
 		return writeAtomicPerm(target, []byte(content), 0644)
 	})
+}
+
+// newPagePath validates the path of a page about to be created or moved and
+// returns it workspace-relative and as a file path. It adds ".md" when the
+// path has no extension, keeps it inside the workspace, keeps it out of
+// harness state, and refuses to follow a symbolic link out of the root.
+func (w *Workspace) newPagePath(pagePath string) (clean, target string, err error) {
+	pagePath = filepath.ToSlash(strings.TrimSpace(pagePath))
+	if filepath.Ext(pagePath) == "" {
+		pagePath += ".md"
+	}
+	if strings.ToLower(filepath.Ext(pagePath)) != ".md" {
+		return "", "", fmt.Errorf("Jikko source pages must use .md")
+	}
+	clean = filepath.ToSlash(filepath.Clean(pagePath))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || filepath.IsAbs(pagePath) || strings.HasPrefix(pagePath, "/") {
+		return "", "", fmt.Errorf("page path must stay inside the workspace")
+	}
+	if reservedPath(clean) {
+		return "", "", fmt.Errorf("%s is reserved for the harness and is not workspace source", clean)
+	}
+	target = filepath.Join(w.Root, filepath.FromSlash(clean))
+	rel, err := filepath.Rel(w.Root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", "", fmt.Errorf("page path must stay inside the workspace")
+	}
+	// A directory on the way may be a symbolic link. Resolve the part that
+	// exists before creating anything, so nothing is written outside the root.
+	if err := w.containedDir(filepath.Dir(target)); err != nil {
+		return "", "", err
+	}
+	return clean, target, nil
 }
 
 // reservedPath reports whether a workspace-relative path belongs to harness
