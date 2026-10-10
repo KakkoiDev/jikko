@@ -161,19 +161,32 @@ Do not optimize for large-video edge cases yet. The harness will impose a config
 
 ## Distribution / Homebrew
 
-First target a project-owned Homebrew tap.
+First target a project-owned Homebrew tap. The release process is written up
+in `docs/RELEASING.md`.
 
 Required work:
 
-1. add an open-source license;
-2. create stable tagged release (e.g. `v0.1.0`);
-3. generate/commit `go.sum` and ensure reproducible dependencies;
-4. add CI: `go test ./...`, `go vet ./...`, formatting check, functional CLI test;
-5. create `KakkoiDev/homebrew-tap` with `Formula/jikko.rb`;
-6. build/install the tagged Go source;
-7. add a functional Homebrew formula test;
-8. test/audit source installation;
-9. document the one-command install in README.
+- [x] add an open-source license (Apache 2.0, `LICENSE`);
+- [ ] create stable tagged release (e.g. `v0.1.0`): `.goreleaser.yaml` and
+      `.github/workflows/release.yml` build, checksum, and publish on every
+      `v*` tag; the tag itself has not been cut;
+- [x] generate/commit `go.sum` and ensure reproducible dependencies
+      (`CGO_ENABLED=0`, `-trimpath`, module checksum database);
+- [x] add CI: `go test ./...`, `go vet ./...`, formatting check, functional
+      CLI test (`.github/workflows/ci.yml`; `cmd/jikko/main_test.go` exercises
+      every command);
+- [ ] create `KakkoiDev/homebrew-tap` with `Formula/jikko.rb`: GoReleaser
+      renders and pushes the formula (`brews` in `.goreleaser.yaml`) once the
+      repository exists and `HOMEBREW_TAP_GITHUB_TOKEN` is set; until then the
+      step is skipped and the formula lands in `dist/homebrew/` for review;
+- [x] build/install the tagged Go source: the formula installs the prebuilt
+      release binary, and `go install github.com/KakkoiDev/jikko/cmd/jikko@<tag>`
+      builds from the tagged source;
+- [x] add a functional Homebrew formula test (`test do` runs `jikko version`);
+- [ ] test/audit source installation (`brew install KakkoiDev/tap/jikko` on
+      macOS and Linux, `brew test jikko`) after the first tag;
+- [ ] document the one-command install in README (pending the tap; the
+      `go install` and Releases routes can be documented now).
 
 Consider `homebrew/core` later after stable releases, real users, and maintenance history.
 

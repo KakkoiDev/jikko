@@ -22,10 +22,14 @@ Native mode keeps the existing HTMX -> HTTP -> Go server path. Offline mode keep
 
 ```sh
 GOOS=js GOARCH=wasm go build -o jikko.wasm ./cmd/jikko-wasm
-cd browser\nnpm install\nnpm run build
+cd browser
+npm install
+npm run build
 ```
 
-Load Go's standard `wasm_exec.js`, instantiate `jikko.wasm`, then load the bundled modules from `browser/dist/`. isomorphic-git and the OPFS adapter are bundled into these files, so the deployed offline runtime has no CDN or npm dependency.
+Load Go's standard `wasm_exec.js` (`$(go env GOROOT)/lib/wasm/wasm_exec.js`), instantiate `jikko.wasm`, then load the bundled modules from `browser/dist/`. isomorphic-git and the OPFS adapter are bundled into these files, so the deployed offline runtime has no CDN or npm dependency.
+
+`npm run check` syntax-checks the JavaScript sources; CI runs it before the bundle.
 
 ## Storage and Git
 
@@ -54,7 +58,9 @@ Branch meaning is deliberately outside Jikko. A caller may use branches for rele
 
 ## Jikko primitives
 
-The Go/WASM API mirrors the permission-aware native runtime:
+The Go/WASM API is **read-only**. It mirrors the permission-aware reads of the native runtime (tree, read, mentions, views, rendering, checks, export) but exposes none of the mutations the CLI and server offer: `create`, `set`, `perm`, `save`, `comment`, `rename`, `delete`, and `upload` have no browser counterpart yet. Writing to a browser workspace means writing bytes to OPFS through the host application and committing them with the Git adapter; the Go core then re-reads them. Mutations will be added behind the same effect-judged authorization as the native harness, not as a second data model.
+
+The functions it exposes:
 
 - `loadOPFS(root, {identity})` / `JikkoWASM.open(files, {identity})`
 - `tree(handle)`

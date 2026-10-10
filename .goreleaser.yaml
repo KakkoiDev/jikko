@@ -1,0 +1,108 @@
+# GoReleaser v2 configuration for Jikko.
+#
+# Validate:        make release-check        (goreleaser check)
+# Local dry run:   make release-snapshot     (goreleaser release --snapshot --clean --skip=publish)
+# Real release:    push a `v*` tag; .github/workflows/release.yml runs the test
+#                  suite and then `goreleaser release --clean`.
+#
+# The Homebrew step publishes Formula/jikko.rb to KakkoiDev/homebrew-tap and
+# is skipped, not failed, when HOMEBREW_TAP_GITHUB_TOKEN is unset or empty.
+#
+# `goreleaser check` exits 2 with "configuration is valid, but uses deprecated
+# properties": the `brews` section is deprecated in favour of `homebrew_casks`
+# (https://goreleaser.com/deprecations#brews). Casks are macOS-only and have no
+# `test do` block, so Jikko keeps a formula, which installs on Linux too.
+# `goreleaser release` only warns about it.
+version: 2
+
+project_name: jikko
+
+builds:
+  - id: jikko
+    main: ./cmd/jikko
+    binary: jikko
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    ids: [jikko]
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - SECURITY.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
+      - "^WIP"
+
+release:
+  github:
+    owner: KakkoiDev
+    name: jikko
+  draft: false
+  # v0.x and tags such as v0.2.0-rc.1 are marked pre-release on GitHub.
+  prerelease: auto
+  mode: replace
+  header: |
+    See CHANGELOG.md for the curated list of changes.
+
+    Verify a download with `sha256sum -c checksums.txt --ignore-missing`.
+
+brews:
+  - name: jikko
+    ids: [default]
+    repository:
+      owner: KakkoiDev
+      name: homebrew-tap
+      branch: main
+      # `index` tolerates an unset variable; `.Env.X` would abort the run.
+      token: '{{ index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}'
+    directory: Formula
+    commit_author:
+      name: goreleaser-bot
+      email: bot@goreleaser.com
+    commit_msg_template: "jikko {{ .Tag }}"
+    homepage: https://github.com/KakkoiDev/jikko
+    description: "Define, discuss, track, prove, and audit work in plain Markdown, for humans and agents"
+    license: Apache-2.0
+    # Skip the tap push when no token is configured instead of failing the
+    # release. The formula is still rendered into dist/homebrew/ for review.
+    skip_upload: '{{ if index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}false{{ else }}true{{ end }}'
+    install: |
+      bin.install "jikko"
+    test: |
+      system "#{bin}/jikko", "version"
