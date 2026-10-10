@@ -11,5 +11,5 @@ Rules:
 - Done? Add a final comment with the result: what was built, how to run it, and the test output as evidence. Then set the task status to `done`.
 - Thinking stays with you. Only decisions, progress, questions, and results go into Jikko.
 - Do not invent new page types or files inside the workspace. The workspace is for the record; the code lives in the current working directory.
-- Comments are one paragraph each (no blank lines). Do not paste whole source files into them; name the files and paths instead.
-- Leave your final result comment unresolved: the task's author resolves it after review. Resolve only your own plan or progress comments.
+- Comments are one paragraph each: no blank lines, no code fences. Do not paste source files into them; name the files and paths instead.
+- Never resolve comment threads; the task's author resolves them after review. Your plan and result comments stay visible for that review.

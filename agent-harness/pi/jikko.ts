@@ -47,6 +47,16 @@ function run(args: string[], stdin?: string) {
   return text(r.out);
 }
 
+// Jikko stores a comment as one paragraph with no code fences: a blank line
+// would split it into two messages and a fence would swallow the thread
+// markup. Fold blank lines and turn fenced blocks into inline code so a
+// list, two sentences, or a short snippet still land as one comment.
+function commentText(message: string): string {
+  const fenced = message.replace(/```[^\n]*\n([\s\S]*?)```/g, (_m, body: string) =>
+    "`" + body.trim().split("\n").map((l: string) => l.trim()).filter(Boolean).join(" ; ") + "`");
+  return fenced.replace(/\n[ \t]*\n+/g, "\n").trim();
+}
+
 function log(ctx: Ctx, data: Record<string, unknown>) {
   try {
     const f = ctx.sessionManager?.getSessionFile?.();
@@ -93,24 +103,20 @@ export default function jikkoExtension(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "jikko_comment", label: "jikko comment",
-    description: "Discuss on a page. add: new comment anchored on a quoted span of the page text (use a short exact phrase from the page, e.g. the title). reply: answer an existing comment id. resolve: close a comment thread. list: comments on a page.",
+    description: "Discuss on a page. add: new comment anchored on a quoted span of the page text (use a short exact phrase from the page, e.g. the title). reply: answer an existing comment id. list: comments on a page. Resolving threads is the reviewer's job, not yours.",
     parameters: Type.Object({
-      action: Type.Union([Type.Literal("add"), Type.Literal("reply"), Type.Literal("resolve"), Type.Literal("list")]),
+      action: Type.Union([Type.Literal("add"), Type.Literal("reply"), Type.Literal("list")]),
       ref,
       anchor: Type.Optional(Type.String({ description: "add: exact text from the page to attach the comment to" })),
-      id: Type.Optional(Type.String({ description: "reply/resolve: the comment id, e.g. c3" })),
+      id: Type.Optional(Type.String({ description: "reply: the comment id, e.g. c3" })),
       message: Type.Optional(Type.String({ description: "add/reply: one Markdown paragraph (single newlines allowed, no blank lines). @mention people for attention." })),
     }),
     promptGuidelines: ["Post a plan comment before writing code, progress comments as you go, and a result comment with evidence at the end."],
     async execute(_id, p) {
-      // Jikko stores a comment as one paragraph; a blank line would split it
-      // into two messages. Fold blank lines so a list or two sentences on
-      // separate lines still land as one comment.
-      const msg = (p.message ?? "").replace(/\n[ \t]*\n+/g, "\n").trim();
+      const msg = commentText(p.message ?? "");
       switch (p.action) {
         case "add": return run(["comment", "add", p.ref, p.anchor ?? "", msg, "--json"]);
         case "reply": return run(["comment", "reply", p.ref, p.id ?? "", msg, "--json"]);
-        case "resolve": return run(["comment", "resolve", p.ref, p.id ?? "", "--json"]);
         case "list": return run(["comment", "list", p.ref, "--json"]);
       }
     },

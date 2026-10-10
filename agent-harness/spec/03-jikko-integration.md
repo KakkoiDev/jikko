@@ -69,7 +69,7 @@ Arguments mirror the CLI exactly so the mapping is obvious and portable.
 | `jikko_show` | `jikko show <ref>... --json` | Read one or more pages. |
 | `jikko_mentions` | `jikko mentions --json` | The identity's inbox. |
 | `jikko_view` | `jikko view <ref> --json` | Evaluate a saved query. |
-| `jikko_comment` | `jikko comment add\|reply\|resolve ...` | Plan, progress, questions, result. |
+| `jikko_comment` | `jikko comment add\|reply\|list ...` | Plan, progress, questions, result. Resolving is the reviewer's act and is not exposed. |
 | `jikko_set` | `jikko set <ref> <prop> <value>` | Task status transitions. |
 | `jikko_create` | `jikko create <path> --type --body` | New document or task, when the task calls for one. |
 | `jikko_save` | `jikko save <ref> --file - --base` | Edit a page body with Jikko's merge, not the harness's file-write tool. |
