@@ -3,6 +3,8 @@ package main
 import (
 	"archive/zip"
 	"encoding/json"
+	"errors"
+	"flag"
 	"io"
 	"os"
 	"os/exec"
@@ -87,6 +89,95 @@ func TestUsageListsEveryCommand(t *testing.T) {
 		if !found {
 			t.Errorf("usage does not list %q:\n%s", name, out)
 		}
+		if _, ok := synopses[name]; !ok {
+			t.Errorf("command %q has no synopsis", name)
+		}
+	}
+	for name := range synopses {
+		if _, ok := commands[name]; !ok {
+			t.Errorf("synopsis %q names no command", name)
+		}
+	}
+}
+
+// help, --help, and -h exit 0 with a synopsis; a wrong invocation or an
+// unknown command exits 2; a failed command exits 1.
+func TestHelpAndExitCodes(t *testing.T) {
+	t.Setenv("JIKKO_TOKEN", "")
+	dir := workspace(t, map[string]string{"a.md": "# A\n"})
+	for name := range commands {
+		if name == "help" {
+			continue
+		}
+		out, errOut, err := cli(t, commands[name], "--help")
+		if !errors.Is(err, flag.ErrHelp) {
+			t.Errorf("%s --help: %v", name, err)
+		}
+		if !strings.HasPrefix(out, "usage: jikko "+name) || !strings.Contains(out, "\nFlags:\n") || !strings.Contains(out, "-dir string") || errOut != "" {
+			t.Errorf("%s --help output:\n%s%s", name, out, errOut)
+		}
+		if viaHelp := mustCLI(t, help, name); viaHelp != out {
+			t.Errorf("help %s differs from %s --help:\n%s\n%s", name, name, viaHelp, out)
+		}
+	}
+	for _, c := range []struct {
+		args []string
+		code int
+	}{
+		{nil, 0}, {[]string{"help"}, 0}, {[]string{"--help"}, 0}, {[]string{"-h"}, 0}, {[]string{"help", "list"}, 0},
+		{[]string{"version"}, 0}, {[]string{"list", "-h", "--dir", dir}, 0},
+		{[]string{"bogus"}, 2}, {[]string{"help", "bogus"}, 2}, {[]string{"list", "--bogus", "--dir", dir}, 2},
+		{[]string{"set", "a", "--dir", dir}, 2}, {[]string{"show", "a", "b", "--raw", "--dir", dir}, 2},
+		{[]string{"show", "nothing", "--dir", dir}, 1}, {[]string{"check", "--dir", filepath.Join(dir, "missing")}, 1},
+	} {
+		var code int
+		out, errOut, _ := cli(t, func([]string) error { code = run(c.args); return nil })
+		if code != c.code {
+			t.Errorf("jikko %v exited %d, want %d:\n%s%s", c.args, code, c.code, out, errOut)
+		}
+		if code == 2 && !strings.Contains(errOut, "jikko") {
+			t.Errorf("jikko %v gave no diagnostic on stderr", c.args)
+		}
+	}
+	if out := mustCLI(t, printVersion); out != "jikko dev\n" {
+		t.Fatalf("version = %q", out)
+	}
+	if _, _, err := cli(t, printVersion, "extra"); err == nil {
+		t.Fatal("version accepted an argument")
+	}
+	_, errOut, _ := cli(t, func([]string) error { run([]string{"frobnicate"}); return nil })
+	if !strings.Contains(errOut, `unknown command "frobnicate"`) {
+		t.Fatalf("unknown command stderr = %q", errOut)
+	}
+	// Commands that act as nobody do not accept a token they would ignore.
+	for _, fn := range []func([]string) error{auth, check, exportWorkspace, serve, initWorkspace} {
+		if _, _, err := cli(t, fn, "--token", "x", "--dir", dir); err == nil || !strings.Contains(err.Error(), "-token") {
+			t.Errorf("a token was accepted: %v", err)
+		}
+	}
+}
+
+func TestWorkspaceDirectoryErrorsAreFriendly(t *testing.T) {
+	t.Setenv("JIKKO_TOKEN", "")
+	missing := filepath.Join(t.TempDir(), "nope")
+	_, _, err := cli(t, list, "--dir", missing)
+	if err == nil || !strings.Contains(err.Error(), "does not exist") || !strings.Contains(err.Error(), "jikko init") {
+		t.Fatalf("missing dir: %v", err)
+	}
+	file := filepath.Join(t.TempDir(), "file.md")
+	if err := os.WriteFile(file, []byte("# F\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cli(t, list, "--dir", file); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("file as dir: %v", err)
+	}
+	dir, aliceToken, _ := team(t)
+	_, _, err = cli(t, create, "x", "--file", filepath.Join(dir, "absent.md"), "--dir", dir, "--token", aliceToken)
+	if err == nil || !strings.HasPrefix(err.Error(), "cannot read ") || !strings.Contains(err.Error(), "no such file") {
+		t.Fatalf("unreadable body: %v", err)
+	}
+	if _, _, err := cli(t, upload, filepath.Join(dir, "absent.png"), "--dir", dir, "--token", aliceToken); err == nil || !strings.HasPrefix(err.Error(), "cannot read ") {
+		t.Fatalf("unreadable upload: %v", err)
 	}
 }
 
@@ -312,15 +403,92 @@ func TestTreeAndMentionsArePermissionFiltered(t *testing.T) {
 	if _, _, err := cli(t, mentions, "--dir", dir); err == nil || !strings.Contains(err.Error(), "authentication required") {
 		t.Fatalf("anonymous mentions: %v", err)
 	}
-	if out := mustCLI(t, mentions, "--dir", dir, "--token", bobToken); out != "open.md\n" {
+	if out := mustCLI(t, mentions, "--dir", dir, "--token", bobToken); out != "open.md:3: See [[tasks/ship]]. @crew please look.\n" {
 		t.Fatalf("mentions = %q", out)
 	}
-	var pages []map[string]any
+	var pages []struct {
+		Path    string
+		Matches []struct {
+			Line    int
+			Text    string
+			Comment string
+		}
+	}
 	if err := json.Unmarshal([]byte(mustCLI(t, mentions, "--dir", dir, "--token", bobToken, "--json")), &pages); err != nil {
 		t.Fatal(err)
 	}
-	if len(pages) != 1 || pages[0]["path"] != "open.md" {
-		t.Fatalf("mentions JSON = %v", pages)
+	if len(pages) != 1 || pages[0].Path != "open.md" || len(pages[0].Matches) != 1 || pages[0].Matches[0].Line != 3 || pages[0].Matches[0].Comment != "" {
+		t.Fatalf("mentions JSON = %+v", pages)
+	}
+	// A mention made in a comment names its thread.
+	mustCLI(t, comment, "add", "tasks/ship", "Ship it", "@bob can you?", "--dir", dir, "--token", bobToken)
+	if err := json.Unmarshal([]byte(mustCLI(t, mentions, "--dir", dir, "--token", bobToken, "--json")), &pages); err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 2 || pages[1].Path != "tasks/ship.md" || pages[1].Matches[0].Comment != "c1" || pages[1].Matches[0].Line != 8 {
+		t.Fatalf("comment mention = %+v", pages)
+	}
+	// An identity nobody mentions gets an empty array, not null.
+	if out := mustCLI(t, mentions, "--dir", dir, "--token", strings.TrimSpace(mustCLI(t, auth, "create", "alice", "--dir", dir)), "--json"); strings.TrimSpace(out) != "[]" {
+		t.Fatalf("empty mentions = %q", out)
+	}
+}
+
+func TestMentionsSince(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir, aliceToken, bobToken := team(t)
+	// Without Git --since cannot be honoured: every mention is listed, with a warning.
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	out, errOut, err := cli(t, mentions, "--since", "HEAD", "--dir", dir, "--token", bobToken)
+	if err != nil || !strings.Contains(out, "open.md:3") || !strings.Contains(errOut, "not Git-backed") {
+		t.Fatalf("no-git fallback: %v %q %q", err, out, errOut)
+	}
+	t.Setenv("GIT_CEILING_DIRECTORIES", "")
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	mustCLI(t, commit, "Import", "--dir", dir, "--token", aliceToken)
+	if out := mustCLI(t, mentions, "--since", "HEAD", "--dir", dir, "--token", bobToken); out != "" {
+		t.Fatalf("nothing changed, yet mentions = %q", out)
+	}
+	mustCLI(t, create, "notes/new", "--body", "# New\n\n@bob look.\n", "--dir", dir, "--token", aliceToken)
+	if out := mustCLI(t, mentions, "--since", "HEAD", "--dir", dir, "--token", bobToken); out != "notes/new.md:3: @bob look.\n" {
+		t.Fatalf("mentions since HEAD = %q", out)
+	}
+	if _, _, err := cli(t, mentions, "--since", "nosuchrev", "--dir", dir, "--token", bobToken); err == nil {
+		t.Fatal("an unknown revision was accepted")
+	}
+}
+
+func TestListAssignee(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("tasks/mine.md", "---\ntype: task\nstatus: todo\nassignee: bob\n---\n# Mine\n")
+	write("tasks/ours.md", "---\ntype: task\nstatus: doing\nassignee: [crew]\npermissions:\n  read: alice\n  admin: alice\n---\n# Ours\n")
+	if out := mustCLI(t, list, "--assignee", "bob", "--dir", dir); out != "task      tasks/mine.md\n" {
+		t.Fatalf("anonymous list by assignee:\n%s", out)
+	}
+	// bob is in crew, but may not read tasks/ours.md.
+	if out := mustCLI(t, list, "--assignee", "me", "--dir", dir, "--token", bobToken); out != "task      tasks/mine.md\n" {
+		t.Fatalf("bob's tasks:\n%s", out)
+	}
+	if out := mustCLI(t, list, "--assignee", "crew", "--dir", dir, "--token", aliceToken); out != "task      tasks/ours.md\n" {
+		t.Fatalf("crew's tasks:\n%s", out)
+	}
+	if out := mustCLI(t, list, "--assignee", "me", "--status", "done", "--json", "--dir", dir, "--token", bobToken); strings.TrimSpace(out) != "[]" {
+		t.Fatalf("filtered list = %q", out)
+	}
+	if _, _, err := cli(t, list, "--assignee", "me", "--dir", dir); err == nil || !strings.Contains(err.Error(), "authentication required") {
+		t.Fatalf("anonymous --assignee me: %v", err)
+	}
+	if _, _, err := cli(t, list, "--assignee", "ghost", "--dir", dir); err == nil {
+		t.Fatal("unknown assignee accepted")
 	}
 }
 
@@ -330,13 +498,18 @@ func TestCreateDocumentsAndTasks(t *testing.T) {
 	if _, _, err := cli(t, create, "notes/x", "--dir", dir, "--body", "# X\n"); err == nil || !strings.Contains(err.Error(), "authentication required") {
 		t.Fatalf("anonymous create: %v", err)
 	}
-	if _, _, err := cli(t, create, "notes/x", "--dir", dir, "--type", "view", "--token", aliceToken); err == nil {
-		t.Fatal("view creation accepted")
+	if _, _, err := cli(t, create, "notes/x", "--dir", dir, "--type", "bogus", "--token", aliceToken); err == nil {
+		t.Fatal("unknown type accepted")
 	}
 	if _, _, err := cli(t, create, "--dir", dir, "--token", aliceToken); err == nil {
 		t.Fatal("create without a path accepted")
 	}
-	mustCLI(t, create, "notes/x", "--dir", dir, "--body", "# X\n", "--token", aliceToken)
+	if _, _, err := cli(t, create, "notes/x", "--body", "a", "--file", "b", "--dir", dir, "--token", aliceToken); err == nil {
+		t.Fatal("--body and --file together accepted")
+	}
+	if out := mustCLI(t, create, "notes/x", "--dir", dir, "--body", "# X\n", "--token", aliceToken); out != "created notes/x.md\n" {
+		t.Fatalf("create output = %q", out)
+	}
 	mustCLI(t, create, "tasks/next", "--dir", dir, "--type", "task", "--body", "# Next\n", "--token", aliceToken)
 
 	b, err := os.ReadFile(filepath.Join(dir, "tasks", "next.md"))
@@ -351,6 +524,63 @@ func TestCreateDocumentsAndTasks(t *testing.T) {
 	}
 	if _, _, err := cli(t, create, "../escape", "--dir", dir, "--token", aliceToken); err == nil {
 		t.Fatal("path traversal accepted")
+	}
+	// A task whose body carries its own frontmatter keeps it.
+	if _, _, err := cli(t, create, "tasks/next", "--dir", dir, "--type", "task", "--body", "# Again\n", "--token", aliceToken); err == nil {
+		t.Fatal("an existing page was overwritten")
+	}
+}
+
+func TestCreateIdentitiesViewsAndFiles(t *testing.T) {
+	dir, aliceToken, _ := team(t)
+	var created struct {
+		Path, Type, Rev string
+	}
+	out := mustCLI(t, create, "people/carol", "--type", "identity", "--body", "# Carol\n", "--json", "--dir", dir, "--token", aliceToken)
+	if err := json.Unmarshal([]byte(out), &created); err != nil || created.Path != "people/carol.md" || created.Type != "identity" || created.Rev == "" {
+		t.Fatalf("create --json = %q (%v)", out, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "people/carol.md")); string(b) != "---\ntype: identity\n---\n# Carol\n" {
+		t.Fatalf("identity source = %q", b)
+	}
+	if out := mustCLI(t, auth, "create", "carol", "--dir", dir); !strings.HasPrefix(out, "jk_") {
+		t.Fatalf("new identity cannot get a token: %q", out)
+	}
+	mustCLI(t, create, "views/todo", "--type", "view", "--body", "filter:\n  type: task\n  status: todo\n", "--dir", dir, "--token", aliceToken)
+	if out := mustCLI(t, view, "views/todo", "--dir", dir); !strings.Contains(out, "tasks/ship.md") {
+		t.Fatalf("created view:\n%s", out)
+	}
+	// A view with a body is a workspace problem, so creating one is refused.
+	if _, _, err := cli(t, create, "views/bad", "--type", "view", "--body", "---\ntype: view\n---\n# body\n", "--dir", dir, "--token", aliceToken); err == nil {
+		t.Fatal("a view with a body was created")
+	}
+	if _, _, err := cli(t, create, "tasks/odd", "--type", "task", "--body", "---\ntype: view\n---\n", "--dir", dir, "--token", aliceToken); err == nil {
+		t.Fatal("a body contradicting --type was accepted")
+	}
+
+	src := filepath.Join(t.TempDir(), "body.md")
+	if err := os.WriteFile(src, []byte("---\nstatus: doing\nassignee: alice\n---\n# From a file\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustCLI(t, create, "tasks/filed", "--type", "task", "--file", src, "--dir", dir, "--token", aliceToken)
+	if b, _ := os.ReadFile(filepath.Join(dir, "tasks/filed.md")); string(b) != "---\nstatus: doing\nassignee: alice\ntype: task\n---\n# From a file\n" {
+		t.Fatalf("task from file = %q", b)
+	}
+	// --file - reads standard input.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString("# Piped\n\nTwo lines.\n"); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	old := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = old })
+	mustCLI(t, create, "notes/piped", "--file", "-", "--dir", dir, "--token", aliceToken)
+	if b, _ := os.ReadFile(filepath.Join(dir, "notes/piped.md")); string(b) != "# Piped\n\nTwo lines.\n" {
+		t.Fatalf("piped page = %q", b)
 	}
 }
 
@@ -391,7 +621,12 @@ func TestCommitAttributesTheAuthenticatedActor(t *testing.T) {
 	if _, _, err := cli(t, commit, "--dir", dir, "--token", aliceToken); err == nil {
 		t.Fatal("commit without a message accepted")
 	}
-	mustCLI(t, commit, "Import", "workspace", "--operation", "import", "--dir", dir, "--token", aliceToken)
+	if out := mustCLI(t, commit, "Import", "workspace", "--operation", "import", "--dir", dir, "--token", aliceToken); !strings.HasPrefix(out, "committed ") {
+		t.Fatalf("commit output = %q", out)
+	}
+	if out := mustCLI(t, commit, "Nothing", "--dir", dir, "--token", aliceToken); out != "nothing to commit\n" {
+		t.Fatalf("empty commit output = %q", out)
+	}
 	out, err := exec.Command("git", "-C", dir, "log", "-1", "--format=%s%n%(trailers:only,unfold)").CombinedOutput()
 	if err != nil {
 		t.Fatal(err)
@@ -407,6 +642,232 @@ func TestCommitAttributesTheAuthenticatedActor(t *testing.T) {
 	}
 	if strings.Contains(string(files), ".auth.md") {
 		t.Fatal("credential file committed")
+	}
+	var res struct {
+		Commit, Actor, Operation string
+		Empty                    bool
+	}
+	if err := os.WriteFile(filepath.Join(dir, "more.md"), []byte("# More\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out = []byte(mustCLI(t, commit, "More", "--json", "--dir", dir, "--token", aliceToken))
+	if err := json.Unmarshal(out, &res); err != nil || len(res.Commit) != 40 || res.Actor != "alice" || res.Operation != "workspace-mutation" || res.Empty {
+		t.Fatalf("commit --json = %s (%v)", out, err)
+	}
+	// A tracked credential file is never staged and is warned about.
+	if out, err := exec.Command("git", "-C", dir, "add", "-f", ".auth.md").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", dir, "-c", "user.name=x", "-c", "user.email=x@y", "commit", "-q", "-m", "leak").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	mustCLI(t, auth, "create", "alice", "--dir", dir) // modifies the tracked .auth.md
+	_, errOut, err := cli(t, commit, "After", "--dir", dir, "--token", aliceToken)
+	if err != nil || !strings.Contains(errOut, "tracked by Git") {
+		t.Fatalf("commit with tracked credentials: %v %q", err, errOut)
+	}
+	status, _ := exec.Command("git", "-C", dir, "status", "--porcelain").CombinedOutput()
+	if !strings.Contains(string(status), " M .auth.md") {
+		t.Fatalf("credential change was staged or committed: %q", status)
+	}
+}
+
+// --commit records one attributed commit per mutating command, limited to
+// the files it touched; jikko log reads them back.
+func TestCommitFlagRecordsEachMutation(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir, aliceToken, bobToken := team(t)
+	if _, _, err := cli(t, set, "ship", "status", "doing", "--commit", "--dir", dir, "--token", bobToken); err == nil || !strings.Contains(err.Error(), "not Git-backed") {
+		t.Fatalf("--commit outside Git: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "tasks/ship.md")); strings.Contains(string(b), "doing") {
+		t.Fatal("the page was changed although it could not be committed")
+	}
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	_, errOut, err := cli(t, set, "ship", "status", "doing", "--commit", "--dir", dir, "--token", bobToken)
+	if err != nil || !strings.Contains(errOut, "committed ") || !strings.Contains(errOut, "(set-metadata)") {
+		t.Fatalf("set --commit: %v %q", err, errOut)
+	}
+	var added map[string]string
+	out := mustCLI(t, comment, "add", "open", "please look", "On it.", "--commit", "--json", "--dir", dir, "--token", bobToken)
+	if err := json.Unmarshal([]byte(out), &added); err != nil || added["id"] != "c1" || added["path"] != "open.md" || len(added["commit"]) != 40 {
+		t.Fatalf("comment add --commit --json = %q", out)
+	}
+	out = mustCLI(t, comment, "resolve", "open", "c1", "--commit", "--json", "--dir", dir, "--token", bobToken)
+	if err := json.Unmarshal([]byte(out), &added); err != nil || added["id"] != "c1" || len(added["commit"]) != 40 {
+		t.Fatalf("comment resolve --json = %q", out)
+	}
+	var created struct{ Path, Commit string }
+	out = mustCLI(t, create, "tasks/plan", "--type", "task", "--body", "# Plan\n", "--commit", "--json", "--dir", dir, "--token", aliceToken)
+	if err := json.Unmarshal([]byte(out), &created); err != nil || len(created.Commit) != 40 {
+		t.Fatalf("create --commit --json = %q", out)
+	}
+	mustCLI(t, perm, "tasks/plan", "admin", "alice", "--commit", "--dir", dir, "--token", aliceToken)
+	mustCLI(t, rename, "tasks/plan", "tasks/roadmap", "--commit", "--dir", dir, "--token", aliceToken)
+	// A no-op is not a commit.
+	mustCLI(t, set, "ship", "status", "doing", "--commit", "--dir", dir, "--token", bobToken)
+	mustCLI(t, deletePage, "tasks/roadmap", "--commit", "--dir", dir, "--token", aliceToken)
+
+	// Only the touched files were recorded: the rest of the workspace is
+	// still untracked.
+	status, _ := exec.Command("git", "-C", dir, "status", "--porcelain").CombinedOutput()
+	if !strings.Contains(string(status), "?? alice.md") || strings.Contains(string(status), "ship.md") || strings.Contains(string(status), ".auth.md") {
+		t.Fatalf("status = %q", status)
+	}
+	var entries []struct {
+		Commit, Actor, Operation string
+		Paths                    []string
+	}
+	if err := json.Unmarshal([]byte(mustCLI(t, logHistory, "--json", "--dir", dir)), &entries); err != nil {
+		t.Fatal(err)
+	}
+	var ops []string
+	for _, e := range entries {
+		ops = append(ops, e.Operation+"@"+e.Actor)
+	}
+	if got := strings.Join(ops, " "); got != "delete@alice rename@alice set-permission@alice create@alice comment-resolve@bob comment-add@bob set-metadata@bob" {
+		t.Fatalf("log = %s", got)
+	}
+	// A rename records both paths; a metadata change only its page.
+	if strings.Join(entries[1].Paths, ",") != "tasks/plan.md,tasks/roadmap.md" || strings.Join(entries[6].Paths, ",") != "tasks/ship.md" {
+		t.Fatalf("paths = %v / %v", entries[1].Paths, entries[6].Paths)
+	}
+	text := mustCLI(t, logHistory, "--limit", "1", "--dir", dir)
+	if lines := strings.Split(strings.TrimSpace(text), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "  alice  delete  ") {
+		t.Fatalf("log text = %q", text)
+	}
+	if out := mustCLI(t, logHistory, "tasks/ship", "--dir", dir); strings.Count(out, "\n") != 1 {
+		t.Fatalf("page log = %q", out)
+	}
+	if _, _, err := cli(t, logHistory, "nothing", "--dir", dir); err == nil {
+		t.Fatal("log of a missing page")
+	}
+	if _, _, err := cli(t, logHistory, "a", "b", "--dir", dir); err == nil {
+		t.Fatal("log accepted two pages")
+	}
+	plain := workspace(t, map[string]string{"a.md": "# A\n"})
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(plain))
+	if _, _, err := cli(t, logHistory, "--dir", plain); err == nil || !strings.Contains(err.Error(), "not Git-backed") {
+		t.Fatalf("log outside Git: %v", err)
+	}
+}
+
+func TestInitCommand(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	t.Setenv("JIKKO_TOKEN", "")
+	dir := filepath.Join(t.TempDir(), "work")
+	out, errOut, err := cli(t, initWorkspace, "--dir", dir, "--identity", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.TrimSpace(out)
+	if !strings.HasPrefix(token, "jk_") || strings.Count(out, "\n") != 1 {
+		t.Fatalf("stdout must be the token alone: %q", out)
+	}
+	for _, want := range []string{"initialized", "as a Git repository", "created alice.md, open-work.md, welcome.md", "token for alice"} {
+		if !strings.Contains(errOut, want) {
+			t.Fatalf("stderr lacks %q:\n%s", want, errOut)
+		}
+	}
+	if out := mustCLI(t, check, "--dir", dir); out != "ok: 3 pages\n" {
+		t.Fatalf("check after init = %q", out)
+	}
+	if out := mustCLI(t, mentions, "--dir", dir, "--token", token); !strings.HasPrefix(out, "welcome.md:") {
+		t.Fatalf("mentions after init = %q", out)
+	}
+	mustCLI(t, create, "tasks/first", "--type", "task", "--body", "# First\n", "--commit", "--dir", dir, "--token", token)
+	if out := mustCLI(t, view, "open-work", "--dir", dir); !strings.Contains(out, "tasks/first.md") {
+		t.Fatalf("open-work view = %q", out)
+	}
+	// Running it again is harmless and issues no second token.
+	out, errOut, err = cli(t, initWorkspace, "--dir", dir, "--identity", "alice")
+	if err != nil || out != "" || !strings.Contains(errOut, "already has a credential") || strings.Contains(errOut, "created") {
+		t.Fatalf("second init: %v %q %q", err, out, errOut)
+	}
+	var res struct {
+		Identity, Token string
+		Created         []string
+		Git             bool `json:"git"`
+	}
+	out = mustCLI(t, initWorkspace, "--dir", dir, "--identity", "bob", "--json")
+	if err := json.Unmarshal([]byte(out), &res); err != nil || res.Identity != "bob" || res.Token == "" || len(res.Created) != 1 || !res.Git {
+		t.Fatalf("init --json = %q (%v)", out, err)
+	}
+	for _, args := range [][]string{{"extra"}, {"--identity", "Not Valid"}, {"--identity", "open-work"}} {
+		if _, _, err := cli(t, initWorkspace, append(args, "--dir", dir)...); err == nil {
+			t.Fatalf("init %v accepted", args)
+		}
+	}
+	plain := filepath.Join(t.TempDir(), "plain")
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(plain))
+	_, errOut, err = cli(t, initWorkspace, "--dir", plain, "--identity", "carol", "--no-git")
+	if err != nil || !strings.Contains(errOut, "not Git-backed") {
+		t.Fatalf("init --no-git: %v %q", err, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(plain, ".git")); !os.IsNotExist(err) {
+		t.Fatal("--no-git made a repository")
+	}
+	if _, errOut, err := cli(t, check, "--dir", plain); err != nil || !strings.Contains(errOut, "not Git-backed") {
+		t.Fatalf("check without Git: %v %q", err, errOut)
+	}
+	if name := defaultIdentity(); name == "" || strings.ToLower(name) != name {
+		t.Fatalf("defaultIdentity = %q", name)
+	}
+}
+
+func TestAuthListAndRevokeOne(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	second := strings.TrimSpace(mustCLI(t, auth, "create", "alice", "--dir", dir))
+	out := mustCLI(t, auth, "list", "--dir", dir)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], "alice") || !strings.HasPrefix(lines[1], "bob") {
+		t.Fatalf("auth list:\n%s", out)
+	}
+	var listed []struct{ Identity, ID, Created string }
+	if err := json.Unmarshal([]byte(mustCLI(t, auth, "list", "--json", "--dir", dir)), &listed); err != nil || len(listed) != 3 || listed[2].Identity != "alice" || listed[2].Created == "" {
+		t.Fatalf("auth list --json: %v %+v", err, listed)
+	}
+	if strings.Contains(out, aliceToken) || strings.Contains(out, second) {
+		t.Fatal("auth list prints tokens")
+	}
+	if _, _, err := cli(t, auth, "revoke", "alice", "--id", "nope", "--dir", dir); err == nil {
+		t.Fatal("a bad id was accepted")
+	}
+	mustCLI(t, auth, "revoke", "alice", "--id", listed[0].ID, "--dir", dir)
+	if _, _, err := cli(t, list, "--dir", dir, "--token", aliceToken); err == nil {
+		t.Fatal("revoked token still works")
+	}
+	for _, token := range []string{second, bobToken} {
+		mustCLI(t, list, "--dir", dir, "--token", token)
+	}
+	for _, args := range [][]string{{"list", "x"}, {"revoke"}, {"create", "alice", "extra"}} {
+		if _, _, err := cli(t, auth, append(args, "--dir", dir)...); err == nil {
+			t.Fatalf("auth %v accepted", args)
+		}
+	}
+}
+
+func TestServeFailsBeforeAnnouncingABadAddress(t *testing.T) {
+	dir := workspace(t, map[string]string{"a.md": "# A\n"})
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	_, errOut, err := cli(t, serve, "--addr", "127.0.0.1:99999", "--dir", dir)
+	if err == nil || strings.Contains(errOut, "serving") {
+		t.Fatalf("serve on a bad port: %v %q", err, errOut)
+	}
+	if !strings.Contains(errOut, "not Git-backed") {
+		t.Fatalf("serve did not warn about a workspace without Git: %q", errOut)
+	}
+	if _, _, err := cli(t, serve, "--auto-commit", "--dir", dir); err == nil || !strings.Contains(err.Error(), "not Git-backed") {
+		t.Fatalf("--auto-commit outside Git: %v", err)
+	}
+	if _, _, err := cli(t, serve, "--dir", filepath.Join(dir, "missing")); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("serve on a missing dir: %v", err)
 	}
 }
 

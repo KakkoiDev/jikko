@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"strconv"
@@ -20,80 +21,146 @@ var commands = map[string]func([]string) error{
 	"tree": tree, "mentions": mentions, "create": create, "commit": commit, "export": exportWorkspace,
 	"comment": comment, "rename": rename, "delete": deletePage,
 	"view": view, "save": save, "upload": upload,
+	"init": initWorkspace, "log": logHistory, "version": printVersion,
 }
+
+// help reads commands, so it is registered after the map is built.
+func init() { commands["help"] = help }
 
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("jikko: ")
-	if len(os.Args) < 2 {
-		usage()
-		return
-	}
-	run, ok := commands[os.Args[1]]
-	if !ok {
-		usage()
-		os.Exit(2)
-	}
-	if err := run(os.Args[2:]); err != nil {
-		if !errors.Is(err, flag.ErrHelp) {
-			log.Print(err)
-		}
-		os.Exit(1)
-	}
+	os.Exit(run(os.Args[1:]))
 }
 
-func usage() {
-	fmt.Println(`jikko <command> [flags]
-
-  list    list pages visible to you
-  show    print one or more pages (batch reads)
-  tree    list the permission-filtered workspace tree
-  view    evaluate a view: filter, sort, and group readable pages
-  mentions list pages addressing the authenticated identity
-  create  create a Markdown document or task
-  upload  add a file to the workspace, optionally embedding it in a page
-  commit  record changes with actor-attributed Git audit trailers
-  export  export a portable workspace ZIP
-  save    save an edited page, merging concurrent changes
-  set     set a metadata property
-  perm    grant or clear a capability on a page
-  rename  move a page and rewrite every reference to it
-  delete  delete a page, reporting references it breaks
-  comment add, reply to, resolve, or list inline comments
-  auth    create or revoke a credential
-  check   report workspace problems and broken references
-  serve   serve the workspace over HTTP
-
-Set JIKKO_TOKEN for authenticated CLI operations.`)
+// run dispatches one command and returns the process exit status: 0 for
+// success and for help, 1 for a failed command, 2 for a usage error or an
+// unknown command.
+func run(args []string) int {
+	if len(args) == 0 {
+		usage()
+		return 0
+	}
+	name := args[0]
+	if name == "-h" || name == "--help" {
+		name = "help"
+	}
+	cmd, ok := commands[name]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "jikko: unknown command %q; run `jikko help` for the list\n", name)
+		return 2
+	}
+	err := cmd(args[1:])
+	if err == nil || errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "jikko: %v\n", err)
+	var usageErr usageError
+	if errors.As(err, &usageErr) {
+		return 2
+	}
+	return 1
 }
 
 // flags builds a flag set carrying the options every command shares and
 // returns the positional arguments. Flags may appear anywhere, so
 // `jikko set task status done --dir w` reads as naturally as the other order.
 func flags(name string, args []string, extra func(*flag.FlagSet)) ([]string, *string, *string, error) {
+	var token *string
+	positional, dir, err := parseFlags(name, args, func(f *flag.FlagSet) {
+		token = f.String("token", os.Getenv("JIKKO_TOKEN"), "bearer token (or JIKKO_TOKEN)")
+		if extra != nil {
+			extra(f)
+		}
+	})
+	return positional, dir, token, err
+}
+
+// flagsNoToken is flags for a command that acts as nobody: it would be
+// misleading to accept a token it ignores.
+func flagsNoToken(name string, args []string, extra func(*flag.FlagSet)) ([]string, *string, error) {
+	return parseFlags(name, args, extra)
+}
+
+func parseFlags(name string, args []string, extra func(*flag.FlagSet)) ([]string, *string, error) {
 	f := flag.NewFlagSet(name, flag.ContinueOnError)
+	f.SetOutput(io.Discard)
+	f.Usage = func() {}
 	dir := f.String("dir", ".", "workspace directory")
-	token := f.String("token", os.Getenv("JIKKO_TOKEN"), "bearer token (or JIKKO_TOKEN)")
 	if extra != nil {
 		extra(f)
 	}
 	var positional []string
 	for {
 		if err := f.Parse(args); err != nil {
-			return nil, dir, token, err
+			if errors.Is(err, flag.ErrHelp) {
+				printHelp(name, f, os.Stdout)
+				return nil, dir, err
+			}
+			return nil, dir, usageError{command: name, detail: err.Error()}
 		}
 		rest := f.Args()
 		if len(rest) == 0 {
-			return positional, dir, token, nil
+			return positional, dir, nil
 		}
 		positional = append(positional, rest[0])
 		args = rest[1:]
 	}
 }
 
+// commitFlag adds --commit to a mutating command.
+func commitFlag(f *flag.FlagSet) *bool {
+	return f.Bool("commit", false, "record the change as one Git commit with Jikko-Actor and Jikko-Operation trailers")
+}
+
+// recorder reports the commits a workspace records when --commit is on.
+type recorder struct {
+	last *jikko.CommitResult
+}
+
+// record turns on attributed commits for the workspace when on is true, and
+// notes each one on standard error.
+func record(w *jikko.Workspace, on bool) *recorder {
+	r := &recorder{}
+	if !on {
+		return r
+	}
+	w.AutoCommit = true
+	w.OnCommit = func(res *jikko.CommitResult) {
+		r.last = res
+		fmt.Fprintf(os.Stderr, "jikko: committed %s (%s)\n", shortHash(res.Commit), res.Operation)
+	}
+	return r
+}
+
+// commit returns the hash of the last recorded commit, for JSON output.
+func (r *recorder) commit() string {
+	if r.last == nil {
+		return ""
+	}
+	return r.last.Commit
+}
+
+func shortHash(hash string) string {
+	if len(hash) > 7 {
+		return hash[:7]
+	}
+	return hash
+}
+
 // openWorkspace loads a workspace and notes, without failing, that it has
 // defects worth inspecting. Content problems never block ordinary reads.
 func openWorkspace(dir string) (*jikko.Workspace, error) {
+	info, err := os.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("workspace directory %q does not exist; run `jikko init --dir %s` to create one", dir, dir)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("workspace directory %q: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("workspace %q is not a directory", dir)
+	}
 	w, err := jikko.Open(dir)
 	if err != nil {
 		return nil, err
@@ -102,6 +169,22 @@ func openWorkspace(dir string) (*jikko.Workspace, error) {
 		fmt.Fprintf(os.Stderr, "jikko: %d workspace problem(s); run `jikko check` for detail\n", n)
 	}
 	return w, nil
+}
+
+// warnWithoutGit says once, on standard error, that a workspace has no Git
+// history behind it (specification §10).
+func warnWithoutGit(root string) {
+	if !jikko.GitBacked(root) {
+		fmt.Fprintf(os.Stderr, "jikko: warning: %s is not Git-backed; history, audit, and three-way merge are unavailable (run `git init` or `jikko init`)\n", root)
+	}
+}
+
+// warnTrackedAuth warns prominently that credential hashes are in history.
+func warnTrackedAuth(root string) {
+	if jikko.AuthTrackedByGit(root) {
+		fmt.Fprintln(os.Stderr, "jikko: WARNING: .auth.md is tracked by Git. Credential hashes are in repository history;")
+		fmt.Fprintln(os.Stderr, "jikko:          adding it to .gitignore now does not remove them. Untrack it and rotate tokens.")
+	}
 }
 
 func actorFor(w *jikko.Workspace, token string) (string, error) {
@@ -113,6 +196,24 @@ func actorFor(w *jikko.Workspace, token string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSuffix(p.Path, ".md"), nil
+}
+
+var errAuthRequired = errors.New("authentication required: pass --token or set JIKKO_TOKEN")
+
+// authenticated opens a workspace and requires an authenticated caller.
+func authenticated(dir, token string) (*jikko.Workspace, string, error) {
+	w, err := openWorkspace(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	actor, err := actorFor(w, token)
+	if err != nil {
+		return nil, "", err
+	}
+	if actor == "" {
+		return nil, "", errAuthRequired
+	}
+	return w, actor, nil
 }
 
 func parseKindFlag(s string) (jikko.Kind, error) {
@@ -136,19 +237,45 @@ func visiblePages(w *jikko.Workspace, actor string, pages []*jikko.Page) []*jikk
 	return visible
 }
 
+// readInput reads a file, or standard input for "-".
+func readInput(name string) ([]byte, error) {
+	if name == "-" {
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("reading standard input: %w", err)
+		}
+		return b, nil
+	}
+	b, err := os.ReadFile(name)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read %s: %v", name, reason(err))
+	}
+	return b, nil
+}
+
+// reason strips the path from a file error, which the message already names.
+func reason(err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+	return err
+}
+
 func list(args []string) error {
-	var typ, status *string
+	var typ, status, assignee *string
 	var asJSON *bool
 	args, dir, token, err := flags("list", args, func(f *flag.FlagSet) {
 		typ = f.String("type", "", "document, task, view, or identity")
 		status = f.String("status", "", "status metadata")
+		assignee = f.String("assignee", "", "pages assigned to an identity, or `me` for the authenticated one")
 		asJSON = f.Bool("json", false, "JSON output")
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) != 0 {
-		return errors.New("usage: jikko list [flags]")
+		return usageOf("list")
 	}
 	kind, err := parseKindFlag(*typ)
 	if err != nil {
@@ -163,6 +290,25 @@ func list(args []string) error {
 		return err
 	}
 	visible := visiblePages(w, actor, w.List(kind, *status))
+	if *assignee != "" {
+		who := *assignee
+		if who == "me" {
+			if actor == "" {
+				return fmt.Errorf("--assignee me: %w", errAuthRequired)
+			}
+			who = actor
+		}
+		if _, ok := w.ResolveIdentity(who); !ok {
+			return fmt.Errorf("identity %q not found or ambiguous", who)
+		}
+		assigned := visible[:0]
+		for _, p := range visible {
+			if w.AssignedTo(p, who) {
+				assigned = append(assigned, p)
+			}
+		}
+		visible = assigned
+	}
 	if *asJSON {
 		return json.NewEncoder(os.Stdout).Encode(visible)
 	}
@@ -182,7 +328,7 @@ func show(args []string) error {
 		return err
 	}
 	if len(args) < 1 || (*raw && (len(args) != 1 || *asJSON)) {
-		return errors.New("usage: jikko show [flags] <reference> [reference...]\n       jikko show --raw <reference>")
+		return usageOf("show")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
@@ -221,24 +367,19 @@ func show(args []string) error {
 }
 
 func set(args []string) error {
-	args, dir, token, err := flags("set", args, nil)
+	var doCommit *bool
+	args, dir, token, err := flags("set", args, func(f *flag.FlagSet) { doCommit = commitFlag(f) })
 	if err != nil {
 		return err
 	}
 	if len(args) != 3 {
-		return errors.New("usage: jikko set [flags] <reference> <property> <value>")
+		return usageOf("set")
 	}
-	w, err := openWorkspace(*dir)
+	w, actor, err := authenticated(*dir, *token)
 	if err != nil {
 		return err
 	}
-	actor, err := actorFor(w, *token)
-	if err != nil {
-		return err
-	}
-	if actor == "" {
-		return errors.New("authentication required: pass --token or set JIKKO_TOKEN")
-	}
+	record(w, *doCommit)
 	if err := w.SetMetadata(actor, args[0], args[1], args[2]); err != nil {
 		return err
 	}
@@ -261,25 +402,22 @@ func warnUnresolved(w *jikko.Workspace, ref string) {
 	}
 }
 
-const commentUsage = `usage:
-  jikko comment add [flags] <reference> <anchor text> <message>
-  jikko comment reply [flags] <reference> <id> <message>
-  jikko comment resolve [flags] <reference> <id>
-  jikko comment list [flags] [reference]`
-
 func comment(args []string) error {
-	var asJSON *bool
-	args, dir, token, err := flags("comment", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
+	var asJSON, doCommit *bool
+	args, dir, token, err := flags("comment", args, func(f *flag.FlagSet) {
+		asJSON = f.Bool("json", false, "JSON output")
+		doCommit = commitFlag(f)
+	})
 	if err != nil {
 		return err
 	}
 	if len(args) == 0 {
-		return errors.New(commentUsage)
+		return usageOf("comment")
 	}
 	op, args := args[0], args[1:]
 	arity := map[string]int{"add": 3, "reply": 3, "resolve": 2}
 	if n, known := arity[op]; (known && len(args) != n) || (!known && (op != "list" || len(args) > 1)) {
-		return errors.New(commentUsage)
+		return usageOf("comment")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
@@ -293,24 +431,39 @@ func comment(args []string) error {
 		return listComments(w, actor, args, *asJSON)
 	}
 	if actor == "" {
-		return errors.New("authentication required: pass --token or set JIKKO_TOKEN")
+		return errAuthRequired
 	}
+	rec := record(w, *doCommit)
+	id := ""
 	switch op {
 	case "add":
-		id, err := w.AddComment(actor, args[0], args[1], args[2])
-		if err != nil {
+		if id, err = w.AddComment(actor, args[0], args[1], args[2]); err != nil {
 			return err
 		}
-		if *asJSON {
-			return json.NewEncoder(os.Stdout).Encode(map[string]string{"id": id})
-		}
-		fmt.Println(id)
-		return nil
 	case "reply":
-		return w.ReplyComment(actor, args[0], args[1], args[2])
+		id = args[1]
+		err = w.ReplyComment(actor, args[0], id, args[2])
 	default:
-		return w.ResolveComment(actor, args[0], args[1])
+		id = args[1]
+		err = w.ResolveComment(actor, args[0], id)
 	}
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		out := map[string]string{"id": id}
+		if p, ok := w.Resolve(args[0]); ok {
+			out["path"] = p.Path
+		}
+		if c := rec.commit(); c != "" {
+			out["commit"] = c
+		}
+		return json.NewEncoder(os.Stdout).Encode(out)
+	}
+	if op == "add" {
+		fmt.Println(id)
+	}
+	return nil
 }
 
 func listComments(w *jikko.Workspace, actor string, args []string, asJSON bool) error {
@@ -345,71 +498,87 @@ func listComments(w *jikko.Workspace, actor string, args []string, asJSON bool) 
 }
 
 func perm(args []string) error {
-	args, dir, token, err := flags("perm", args, nil)
+	var doCommit *bool
+	args, dir, token, err := flags("perm", args, func(f *flag.FlagSet) { doCommit = commitFlag(f) })
 	if err != nil {
 		return err
 	}
 	if len(args) < 2 {
-		return errors.New("usage: jikko perm [flags] <reference> <read|comment|write|admin> [identity...]")
+		return usageOf("perm")
 	}
-	w, err := openWorkspace(*dir)
+	w, actor, err := authenticated(*dir, *token)
 	if err != nil {
 		return err
 	}
-	actor, err := actorFor(w, *token)
-	if err != nil {
-		return err
-	}
-	if actor == "" {
-		return errors.New("authentication required: pass --token or set JIKKO_TOKEN")
-	}
+	record(w, *doCommit)
 	return w.SetPermission(actor, args[0], args[1], args[2:]...)
 }
 
 func auth(args []string) error {
-	args, dir, _, err := flags("auth", args, nil)
+	var id *string
+	var asJSON *bool
+	args, dir, err := flagsNoToken("auth", args, func(f *flag.FlagSet) {
+		id = f.String("id", "", "with revoke: the one credential to remove, from `jikko auth list`")
+		asJSON = f.Bool("json", false, "with list: JSON output")
+	})
 	if err != nil {
 		return err
 	}
-	if len(args) != 2 {
-		return errors.New("usage: jikko auth [flags] <create|revoke> <identity>")
+	if len(args) == 0 {
+		return usageOf("auth")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
 		return err
 	}
-	switch args[0] {
-	case "create":
+	switch {
+	case args[0] == "create" && len(args) == 2:
 		token, err := w.CreateCredential(args[1])
 		if err != nil {
 			return err
 		}
-		if jikko.AuthTrackedByGit(w.Root) {
-			fmt.Fprintln(os.Stderr, "jikko: WARNING: .auth.md is tracked by Git. Credential hashes are in repository history;")
-			fmt.Fprintln(os.Stderr, "jikko:          adding it to .gitignore now does not remove them. Untrack it and rotate tokens.")
-		}
+		warnTrackedAuth(w.Root)
 		fmt.Println(token)
-	case "revoke":
+	case args[0] == "list" && len(args) == 1:
+		credentials, err := w.Credentials()
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return json.NewEncoder(os.Stdout).Encode(credentials)
+		}
+		for _, c := range credentials {
+			created := c.Created
+			if created == "" {
+				created = "-"
+			}
+			fmt.Printf("%-24s %s  %s\n", c.Identity, c.ID, created)
+		}
+	case args[0] == "revoke" && len(args) == 2:
+		if *id != "" {
+			return w.RevokeCredential(args[1], *id)
+		}
 		return w.RevokeCredentials(args[1])
 	default:
-		return errors.New("usage: jikko auth [flags] <create|revoke> <identity>")
+		return usageOf("auth")
 	}
 	return nil
 }
 
 func check(args []string) error {
 	var asJSON *bool
-	args, dir, _, err := flags("check", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
+	args, dir, err := flagsNoToken("check", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
 	if err != nil {
 		return err
 	}
 	if len(args) != 0 {
-		return errors.New("usage: jikko check [flags]")
+		return usageOf("check")
 	}
-	w, err := jikko.Open(*dir)
+	w, err := openWorkspace(*dir)
 	if err != nil {
 		return err
 	}
+	warnWithoutGit(w.Root)
 	unresolved, err := w.UnresolvedReferences()
 	if err != nil {
 		return err
@@ -452,7 +621,7 @@ func tree(args []string) error {
 		return err
 	}
 	if len(args) != 0 {
-		return errors.New("usage: jikko tree [flags]")
+		return usageOf("tree")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
@@ -474,79 +643,162 @@ func tree(args []string) error {
 
 func mentions(args []string) error {
 	var asJSON *bool
+	var since *string
 	args, dir, token, err := flags("mentions", args, func(f *flag.FlagSet) {
 		asJSON = f.Bool("json", false, "JSON output")
+		since = f.String("since", "", "only pages changed since this Git revision")
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) != 0 {
-		return errors.New("usage: jikko mentions [flags]")
+		return usageOf("mentions")
 	}
-	w, err := openWorkspace(*dir)
+	w, actor, err := authenticated(*dir, *token)
 	if err != nil {
 		return err
 	}
-	actor, err := actorFor(w, *token)
-	if err != nil {
-		return err
+	pages := w.MentionDetails(actor)
+	if *since != "" {
+		changed, err := w.ChangedSince(*since)
+		switch {
+		case errors.Is(err, jikko.ErrNoGit):
+			fmt.Fprintf(os.Stderr, "jikko: warning: %s is not Git-backed; --since is ignored and every mention is listed\n", w.Root)
+		case err != nil:
+			return err
+		default:
+			set := map[string]bool{}
+			for _, p := range changed {
+				set[p] = true
+			}
+			kept := pages[:0]
+			for _, m := range pages {
+				if set[m.Path] {
+					kept = append(kept, m)
+				}
+			}
+			pages = kept
+		}
 	}
-	if actor == "" {
-		return errors.New("authentication required: pass --token or set JIKKO_TOKEN")
+	if pages == nil {
+		pages = []jikko.MentionPage{}
 	}
-	pages := w.Mentions(actor)
 	if *asJSON {
 		return json.NewEncoder(os.Stdout).Encode(pages)
 	}
-	for _, p := range pages {
-		fmt.Printf("%s\n", p.Path)
+	for _, m := range pages {
+		for _, hit := range m.Matches {
+			where := fmt.Sprintf("%s:%d", m.Path, hit.Line)
+			if hit.Comment != "" {
+				where += " (" + hit.Comment + ")"
+			}
+			fmt.Printf("%s: %s\n", where, hit.Text)
+		}
 	}
 	return nil
 }
 
 func create(args []string) error {
-	var body, typ *string
+	var body, file, typ *string
+	var asJSON, doCommit *bool
 	args, dir, token, err := flags("create", args, func(f *flag.FlagSet) {
 		body = f.String("body", "", "Markdown body")
-		typ = f.String("type", "document", "document or task")
+		file = f.String("file", "", "read the body from a file, or - for standard input")
+		typ = f.String("type", "document", "document, task, view, or identity")
+		asJSON = f.Bool("json", false, "JSON output")
+		doCommit = commitFlag(f)
 	})
 	if err != nil {
 		return err
 	}
-	if len(args) != 1 {
-		return errors.New("usage: jikko create [flags] <path> --body <markdown> [--type document|task]")
+	if len(args) != 1 || (*body != "" && *file != "") {
+		return usageOf("create")
 	}
-	if *typ != "document" && *typ != "task" {
-		return errors.New("--type must be document or task")
-	}
-	w, err := openWorkspace(*dir)
+	kind, err := parseKindFlag(*typ)
 	if err != nil {
 		return err
-	}
-	actor, err := actorFor(w, *token)
-	if err != nil {
-		return err
-	}
-	if actor == "" {
-		return errors.New("authentication required: pass --token or set JIKKO_TOKEN")
 	}
 	content := *body
-	if *typ == "task" {
-		content = "---\ntype: task\nstatus: todo\n---\n" + content
+	if *file != "" {
+		b, err := readInput(*file)
+		if err != nil {
+			return err
+		}
+		content = string(b)
 	}
-	return w.CreatePage(actor, args[0], content)
+	source, err := jikko.NewPageSource(kind, content)
+	if err != nil {
+		return err
+	}
+	w, actor, err := authenticated(*dir, *token)
+	if err != nil {
+		return err
+	}
+	rec := record(w, *doCommit)
+	if err := w.CreatePage(actor, args[0], string(source)); err != nil {
+		return err
+	}
+	p, ok := w.Resolve(args[0])
+	if !ok {
+		return fmt.Errorf("%s was created but does not resolve; run `jikko check`", args[0])
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(struct {
+			Path   string     `json:"path"`
+			Type   jikko.Kind `json:"type"`
+			Rev    string     `json:"rev"`
+			Commit string     `json:"commit,omitempty"`
+		}{p.Path, p.Kind, p.Rev, rec.commit()})
+	}
+	fmt.Printf("created %s\n", p.Path)
+	return nil
 }
 
 func commit(args []string) error {
 	var operation *string
+	var asJSON *bool
 	args, dir, token, err := flags("commit", args, func(f *flag.FlagSet) {
 		operation = f.String("operation", "workspace-mutation", "audit operation name")
+		asJSON = f.Bool("json", false, "JSON output")
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) < 1 {
-		return errors.New("usage: jikko commit [flags] <message>")
+		return usageOf("commit")
+	}
+	w, actor, err := authenticated(*dir, *token)
+	if err != nil {
+		return err
+	}
+	warnTrackedAuth(w.Root)
+	res, err := w.CommitChanges(actor, strings.Join(args, " "), *operation, nil)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(res)
+	}
+	if res.Empty {
+		fmt.Println("nothing to commit")
+		return nil
+	}
+	fmt.Printf("committed %s\n", shortHash(res.Commit))
+	return nil
+}
+
+func logHistory(args []string) error {
+	var asJSON *bool
+	var limit *int
+	args, dir, token, err := flags("log", args, func(f *flag.FlagSet) {
+		asJSON = f.Bool("json", false, "JSON output")
+		limit = f.Int("limit", 0, "show at most this many commits (0: all)")
+	})
+	if err != nil {
+		return err
+	}
+	if len(args) > 1 {
+		return usageOf("log")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
@@ -556,22 +808,40 @@ func commit(args []string) error {
 	if err != nil {
 		return err
 	}
-	if actor == "" {
-		return errors.New("authentication required: pass --token or set JIKKO_TOKEN")
+	ref := ""
+	if len(args) == 1 {
+		ref = args[0]
 	}
-	return w.Commit(actor, strings.Join(args, " "), *operation)
+	entries, err := w.Log(actor, ref, *limit)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(entries)
+	}
+	for _, e := range entries {
+		by, op := e.Actor, e.Operation
+		if by == "" {
+			by = e.Author + " (git)"
+		}
+		if op == "" {
+			op = "-"
+		}
+		fmt.Printf("%s  %s  %s  %s  %s\n", shortHash(e.Commit), e.Date, by, op, e.Subject)
+	}
+	return nil
 }
 
 func exportWorkspace(args []string) error {
 	var output *string
-	args, dir, _, err := flags("export", args, func(f *flag.FlagSet) {
+	args, dir, err := flagsNoToken("export", args, func(f *flag.FlagSet) {
 		output = f.String("output", "jikko-workspace.zip", "output ZIP path")
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) != 0 {
-		return errors.New("usage: jikko export [flags]")
+		return usageOf("export")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
@@ -585,21 +855,23 @@ func exportWorkspace(args []string) error {
 }
 
 func rename(args []string) error {
-	var asJSON, noRewrite *bool
+	var asJSON, noRewrite, doCommit *bool
 	args, dir, token, err := flags("rename", args, func(f *flag.FlagSet) {
 		asJSON = f.Bool("json", false, "JSON output")
 		noRewrite = f.Bool("no-rewrite", false, "move the file only and report the references that break")
+		doCommit = commitFlag(f)
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) != 2 {
-		return errors.New("usage: jikko rename [flags] <reference> <new path> [--no-rewrite]")
+		return usageOf("rename")
 	}
 	w, actor, err := authenticated(*dir, *token)
 	if err != nil {
 		return err
 	}
+	record(w, *doCommit)
 	res, err := w.Rename(actor, args[0], args[1], jikko.RenameOptions{NoRewrite: *noRewrite})
 	if err != nil {
 		return err
@@ -618,21 +890,23 @@ func rename(args []string) error {
 }
 
 func deletePage(args []string) error {
-	var asJSON, prune *bool
+	var asJSON, prune, doCommit *bool
 	args, dir, token, err := flags("delete", args, func(f *flag.FlagSet) {
 		asJSON = f.Bool("json", false, "JSON output")
 		prune = f.Bool("prune", false, "remove a deleted identity from group members and access policies")
+		doCommit = commitFlag(f)
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) != 1 {
-		return errors.New("usage: jikko delete [flags] <reference> [--prune]")
+		return usageOf("delete")
 	}
 	w, actor, err := authenticated(*dir, *token)
 	if err != nil {
 		return err
 	}
+	record(w, *doCommit)
 	res, err := w.Delete(actor, args[0], jikko.DeleteOptions{Prune: *prune})
 	if err != nil {
 		return err
@@ -648,22 +922,6 @@ func deletePage(args []string) error {
 	reportRefs("now resolves", res.Captured)
 	reportHidden(res.Hidden)
 	return nil
-}
-
-// authenticated opens a workspace and requires an authenticated caller.
-func authenticated(dir, token string) (*jikko.Workspace, string, error) {
-	w, err := openWorkspace(dir)
-	if err != nil {
-		return nil, "", err
-	}
-	actor, err := actorFor(w, token)
-	if err != nil {
-		return nil, "", err
-	}
-	if actor == "" {
-		return nil, "", errors.New("authentication required: pass --token or set JIKKO_TOKEN")
-	}
-	return w, actor, nil
 }
 
 func reportRefs(what string, changes []jikko.RefChange) {
@@ -685,7 +943,7 @@ func view(args []string) error {
 		return err
 	}
 	if len(args) != 1 {
-		return errors.New("usage: jikko view [flags] <view reference>")
+		return usageOf("view")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
@@ -723,7 +981,7 @@ func view(args []string) error {
 }
 
 func save(args []string) error {
-	var asJSON *bool
+	var asJSON, doCommit *bool
 	var rev, file, base, against *string
 	resolve := map[string]string{}
 	args, dir, token, err := flags("save", args, func(f *flag.FlagSet) {
@@ -740,18 +998,13 @@ func save(args []string) error {
 		rev = f.String("rev", "", "revision the edit was based on (from show --json or show --raw)")
 		file = f.String("file", "-", "edited source, or - for standard input")
 		base = f.String("base", "", "the source as originally read, so a concurrent change can be merged without Git history")
+		doCommit = commitFlag(f)
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) != 1 {
-		return errors.New("usage: jikko save [flags] <reference> --rev <rev> [--file <path>|-] [--base <path>]")
-	}
-	readInput := func(name string) ([]byte, error) {
-		if name == "-" {
-			return io.ReadAll(os.Stdin)
-		}
-		return os.ReadFile(name)
+		return usageOf("save")
 	}
 	yours, err := readInput(*file)
 	if err != nil {
@@ -770,6 +1023,7 @@ func save(args []string) error {
 	if err != nil {
 		return err
 	}
+	record(w, *doCommit)
 	res, err := w.SaveSource(actor, args[0], *rev, yours, opt)
 	var conflict *jikko.ConflictError
 	if errors.As(err, &conflict) {
@@ -820,19 +1074,20 @@ func printConflict(c jikko.Conflict) {
 }
 
 func upload(args []string) error {
-	var asJSON *bool
+	var asJSON, doCommit *bool
 	var into, as, maxSize *string
 	args, dir, token, err := flags("upload", args, func(f *flag.FlagSet) {
 		asJSON = f.Bool("json", false, "JSON output")
 		into = f.String("into", "", "page to embed the file into")
 		as = f.String("as", "", "destination path in the workspace (default: the file's name next to --into, or at the root)")
 		maxSize = f.String("max-upload", os.Getenv("JIKKO_MAX_UPLOAD"), "maximum upload size, such as 25M (or JIKKO_MAX_UPLOAD)")
+		doCommit = commitFlag(f)
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) != 1 {
-		return errors.New("usage: jikko upload [flags] <file> [--into <page>] [--as <path>]")
+		return usageOf("upload")
 	}
 	limit, err := parseSize(*maxSize)
 	if err != nil {
@@ -840,7 +1095,7 @@ func upload(args []string) error {
 	}
 	info, err := os.Stat(args[0])
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot read %s: %v", args[0], reason(err))
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("%s is not a regular file", args[0])
@@ -848,7 +1103,7 @@ func upload(args []string) error {
 	if info.Size() > limit {
 		return fmt.Errorf("%s is %d bytes; the maximum upload size is %d bytes", args[0], info.Size(), limit)
 	}
-	data, err := os.ReadFile(args[0])
+	data, err := readInput(args[0])
 	if err != nil {
 		return err
 	}
@@ -856,6 +1111,7 @@ func upload(args []string) error {
 	if err != nil {
 		return err
 	}
+	record(w, *doCommit)
 	res, err := w.Upload(actor, args[0], data, jikko.UploadOptions{Path: *as, Into: *into, MaxBytes: limit})
 	if err != nil {
 		return err
