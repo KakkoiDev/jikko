@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Jikko</title>
+<meta name="description" content="Define, discuss, track, prove, and audit work in plain Markdown, for humans and agents.">
+<style>
+:root {
+  --bg: #ffffff;
+  --fg: #111111;
+  --muted: #5f6368;
+  --line: #e2e2e2;
+  --code-bg: #f4f4f4;
+  --accent: #0b5cad;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111214;
+    --fg: #e8e8e6;
+    --muted: #a0a3a8;
+    --line: #2c2e33;
+    --code-bg: #1b1d21;
+    --accent: #7db4ee;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+}
+main { max-width: 42rem; margin: 0 auto; padding: 0 16px 4rem; }
+header.hero { padding: 3rem 0 1.5rem; }
+h1 { font-size: 2.6rem; line-height: 1.1; margin: 0 0 0.5rem; letter-spacing: -0.02em; }
+.tagline { font-size: 1.3rem; margin: 0 0 0.75rem; }
+.status { color: var(--muted); font-size: 0.95rem; margin: 0; }
+h2 { font-size: 1.35rem; margin: 2.5rem 0 0.75rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
+h3 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; }
+p, ul, ol { margin: 0 0 0.9rem; }
+li { margin-bottom: 0.3rem; }
+a { color: var(--accent); }
+a:hover { text-decoration-thickness: 2px; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }
+code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; }
+pre {
+  background: var(--code-bg);
+  padding: 0.85rem 1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0 0 1rem;
+  line-height: 1.5;
+}
+pre code { background: none; padding: 0; }
+.comment { color: var(--muted); }
+.steps { counter-reset: step; list-style: none; padding: 0; }
+.steps > li { counter-increment: step; margin-bottom: 1.5rem; }
+.steps > li::before {
+  content: counter(step);
+  display: inline-block;
+  width: 1.6rem; height: 1.6rem; line-height: 1.6rem;
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  margin-right: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.steps strong { font-weight: 600; }
+dl { margin: 0 0 1rem; }
+dt { font-weight: 600; }
+dd { margin: 0 0 0.6rem; color: var(--muted); }
+dd code { color: var(--fg); }
+.links { padding-left: 1.2rem; }
+footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.9rem; }
+footer p { margin: 0 0 0.4rem; }
+</style>
+</head>
+<body>
+<main>
+
+<header class="hero">
+  <h1>Jikko</h1>
+  <p class="tagline">Define, discuss, track, prove, and audit work in plain Markdown, for humans and agents.</p>
+  <p class="status">Pre-release. Apache&nbsp;2.0. Source on <a href="https://github.com/KakkoiDev/jikko">GitHub</a>.</p>
+</header>
+
+<section>
+  <h2 id="what">What it is</h2>
+  <p>A Jikko workspace is a folder of ordinary Markdown files. Nothing is locked inside an application: you can read and edit it with any editor, keep it in Git, and hand it to a person or an AI agent.</p>
+  <p>A little structure gives the files meaning. YAML frontmatter says what a page <em>is</em>, <code>[[links]]</code> relate pages, <code>![[embeds]]</code> compose them, <code>@mentions</code> address people, agents, and groups, and comments stay inside the Markdown they discuss. There are four kinds of page and no more:</p>
+  <dl>
+    <dt>Document</dt><dd>any Markdown file. Information, composition, and a durable place to discuss.</dd>
+    <dt>Task</dt><dd><code>type: task</code>. Status, assignee, due date, dependencies, blockers, and the evidence that proves it done.</dd>
+    <dt>View</dt><dd><code>type: view</code>. A saved query over the workspace, shown as a board, table, or list.</dd>
+    <dt>Identity</dt><dd><code>type: identity</code>. A person, an agent, or a group of them, used for mentions, assignment, and permissions.</dd>
+  </dl>
+  <p>The <code>jikko</code> command and its built-in web server understand that structure: they validate references, filter every page by who may read it, evaluate views, merge concurrent edits, and give agents the same operations as humans with <code>--json</code> output.</p>
+</section>
+
+<section>
+  <h2 id="quickstart">Quickstart</h2>
+  <ol class="steps">
+    <li>
+      <strong>Make a workspace.</strong> Any folder of Markdown files is one. Give it a page and an identity for yourself.
+<pre><code>mkdir notes &amp;&amp; cd notes
+
+cat &gt; welcome.md &lt;&lt;'EOF'
+# Welcome
+
+The first task is [[tasks/first]]. Questions go to @alice.
+EOF
+
+mkdir -p tasks identity
+cat &gt; tasks/first.md &lt;&lt;'EOF'
+---
+type: task
+status: todo
+assignee: alice
+---
+
+# Write the plan
+EOF
+
+cat &gt; identity/alice.md &lt;&lt;'EOF'
+---
+type: identity
+---
+
+# Alice
+EOF
+
+jikko check          <span class="comment"># reports broken references and malformed pages</span>
+jikko list --type task</code></pre>
+    </li>
+    <li>
+      <strong>Create a credential.</strong> Editing, through the CLI or the browser, is done as an identity. <code>auth create</code> prints a bearer token once; only its hash is kept, in <code>.auth.md</code>, which should stay out of Git.
+<pre><code>export JIKKO_TOKEN="$(jikko auth create alice)"
+jikko set tasks/first status doing</code></pre>
+    </li>
+    <li>
+      <strong>Serve it.</strong> The web interface is embedded in the binary and binds to localhost.
+<pre><code>jikko serve
+<span class="comment"># open http://127.0.0.1:8080 and log in with the token</span></code></pre>
+      Every page has a rendered view with its properties, backlinks, and discussion; those allowed to change it get an editor and comment forms. A save made against an old revision is merged, or shown side by side to settle.
+    </li>
+  </ol>
+  <p>Add <code>--dir /path/to/workspace</code> to any command to run it from elsewhere. Pass <code>--json</code> to <code>list</code>, <code>show</code>, <code>tree</code>, <code>view</code>, <code>mentions</code>, and <code>check</code> for output meant for scripts and agents.</p>
+</section>
+
+<section>
+  <h2 id="install">Install</h2>
+  <p>With Go 1.25 or later:</p>
+<pre><code>go install github.com/KakkoiDev/jikko/cmd/jikko@latest</code></pre>
+  <p>Prebuilt binaries for Linux, macOS, and Windows, with checksums, are attached to each <a href="https://github.com/KakkoiDev/jikko/releases">GitHub release</a> once a version is tagged. A Homebrew tap (<code>brew install KakkoiDev/tap/jikko</code>) is published from the same release and will be documented in the README when it is live.</p>
+</section>
+
+<section>
+  <h2 id="agents">For agents</h2>
+  <p>Jikko is meant to be the place where humans and agents meet over the work. An agent authenticates as an Identity, reads the permission-filtered workspace with <code>jikko tree</code>, <code>show</code>, and <code>mentions</code>, then writes back goals, decisions, progress, and evidence with the same structured operations (<code>create</code>, <code>set</code>, <code>comment</code>, <code>save</code>, <code>upload</code>). Git-backed workspaces can record a batch of changes with <code>jikko commit</code>, which attributes the commit to the actor. Start with <a href="https://github.com/KakkoiDev/jikko/blob/master/agent.md">agent.md</a>.</p>
+</section>
+
+<section>
+  <h2 id="specs">Read the specifications</h2>
+  <ul class="links">
+    <li><a href="https://github.com/KakkoiDev/jikko/blob/master/README.md">README</a>: the full tutorial and command reference.</li>
+    <li><a href="https://github.com/KakkoiDev/jikko/blob/master/specification-v1.md">specification-v1.md</a>: the source format, page kinds, references, and the work model.</li>
+    <li><a href="https://github.com/KakkoiDev/jikko/blob/master/identity-permissions.md">identity-permissions.md</a> and <a href="https://github.com/KakkoiDev/jikko/blob/master/permission-semantics-v1.md">permission-semantics-v1.md</a>: identities, authentication, and the <code>permissions</code> policy.</li>
+    <li><a href="https://github.com/KakkoiDev/jikko/blob/master/architecture-browser.md">architecture-browser.md</a> and <a href="https://github.com/KakkoiDev/jikko/blob/master/browser/README.md">browser/README.md</a>: the server-first web interface and the read-only browser/WASM runtime.</li>
+    <li><a href="https://github.com/KakkoiDev/jikko/blob/master/ux-plan.md">ux-plan.md</a>: product decisions and what is still planned.</li>
+    <li><a href="https://github.com/KakkoiDev/jikko/blob/master/SECURITY.md">SECURITY.md</a>: what the permission model does and does not protect.</li>
+  </ul>
+</section>
+
+<footer>
+  <p>Jikko is an early specification and reference implementation. The web server binds to <code>127.0.0.1</code> and has no transport security of its own; put it behind a TLS-terminating proxy to reach it from elsewhere.</p>
+  <p>&copy; KakkoiDev. Licensed under Apache&nbsp;2.0.</p>
+</footer>
+
+</main>
+</body>
+</html>
