@@ -1,0 +1,2 @@
+{"ts":"2026-10-10T10:54:14.368Z","kind":"session_start","session":"01a12571-52b0-72bf-b5a1-f52ad6365259","reason":"startup","cwd":"/Users/kakkoidev/Code/jikko/sandbox/gemma/wc-cli","model":"ollama/gemma4:26b","thinkingLevel":"medium","systemPromptChars":4315}
+{"ts":"2026-10-10T10:54:14.369Z","kind":"run_start","session":"01a12571-52b0-72bf-b5a1-f52ad6365259","promptChars":98,"systemPromptChars":4315}
