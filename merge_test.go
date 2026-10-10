@@ -383,3 +383,30 @@ func TestSaveSourceResolvesConflicts(t *testing.T) {
 		t.Fatalf("resolved:\n%s", readFile(t, d, "plan.md"))
 	}
 }
+
+// A base read before the file's line endings changed still anchors the
+// merge: the endings are not an edit of every line.
+func TestSaveSourceMergesAcrossLineEndingChange(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "notes.md", "---\nstatus: todo\n---\nOne\nTwo\n")
+	w := openTest(t, d)
+	base, page, err := w.Source("alice", "notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Someone converts the file to CRLF and adds a line.
+	writeTest(t, d, "notes.md", "---\r\nstatus: todo\r\n---\r\nOne\r\nTwo\r\nThree\r\n")
+	res, err := w.SaveSource("alice", "notes", page.Rev, []byte("---\nstatus: doing\n---\nOne\nTwo\n"), SaveOptions{Base: base})
+	if err != nil || !res.Merged {
+		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+	if got := readFile(t, d, "notes.md"); got != "---\r\nstatus: doing\r\n---\r\nOne\r\nTwo\r\nThree\r\n" {
+		t.Fatalf("notes.md = %q", got)
+	}
+	// A closing fence at the end of a CRLF file gets a CRLF before the body.
+	out, c, err := merge3([]byte("---\r\na: 1\r\n---"), []byte("---\r\na: 1\r\n---"), []byte("---\r\na: 1\r\n---\r\nbody\r\n"), nil)
+	if err != nil || c != nil || string(out) != "---\r\na: 1\r\n---\r\nbody\r\n" {
+		t.Fatalf("merge3 = %q %+v %v", out, c, err)
+	}
+}

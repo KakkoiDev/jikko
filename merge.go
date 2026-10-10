@@ -228,7 +228,11 @@ func assemble(current []byte, c source, changes []fieldChange, body string) ([]b
 	out := append(append([]byte(nil), head...), body...)
 	if hasFront && !bytes.HasSuffix(head, []byte("\n")) && body != "" {
 		// A closing fence at end of file has no line break.
-		out = append(append(append([]byte(nil), head...), '\n'), body...)
+		nl := "\n"
+		if usesCRLF(head) {
+			nl = "\r\n"
+		}
+		out = append(append(append([]byte(nil), head...), nl...), body...)
 	}
 	if len(changes) == 0 {
 		return out, nil

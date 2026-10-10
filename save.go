@@ -118,6 +118,9 @@ func (w *Workspace) SaveSource(actor, ref, baseRev string, yours []byte, opt Sav
 			resolve = opt.Resolve
 		}
 		if known {
+			// The base may be the file before its line endings changed;
+			// an ending is not an edit.
+			base = matchLineEndings(base, raw)
 			merged, c, err := merge3(base, raw, yours, resolve)
 			if err != nil {
 				return nil, err
