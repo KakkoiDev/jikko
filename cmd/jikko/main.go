@@ -20,6 +20,7 @@ var commands = map[string]func([]string) error{
 	"tree": tree, "mentions": mentions, "create": create, "commit": commit, "export": exportWorkspace,
 	"comment": comment, "rename": rename, "delete": deletePage,
 	"view": view, "save": save, "upload": upload,
+	"web": web, "identity": identity,
 }
 
 func main() {
@@ -63,6 +64,8 @@ func usage() {
   auth    create or revoke a credential
   check   report workspace problems and broken references
   serve   serve the workspace over HTTP
+  web     serve the workspace and open it in the browser
+  identity run an agent as an identity: jikko identity <name> start|status
 
 Set JIKKO_TOKEN for authenticated CLI operations.`)
 }
