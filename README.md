@@ -6,28 +6,94 @@ Jikko is a human-readable workspace where humans and agents define, discuss, tra
 
 Jikko is the authoritative place for the work. Humans and agents are expected to read the relevant Jikko context before acting and to return goals, discussions, decisions, progress, and evidence to Jikko. External conversations may help, but they are not project knowledge until recorded in the workspace.
 
-A workspace is ordinary files. YAML frontmatter adds explicit semantics, `[[links]]` express relationships, `![[embeds]]` compose files, inline comments keep unresolved review attached to source, and `@mentions` address humans, agents, and groups. Git is planned as the reference harness substrate for audit/history and three-way text merge.
+A workspace is ordinary files. YAML frontmatter adds explicit semantics, `[[links]]` express relationships, `![[embeds]]` compose files, inline comments keep unresolved review attached to source, and `@mentions` address humans, agents, and groups. Git is the reference harness substrate for audit/history and three-way text merge.
 
-## Quickstart tutorial
+## Quickstart
 
-Jikko is pre-release, so the current development install requires Go. A project-owned Homebrew tap is planned for the first tagged release.
+Jikko is pre-release, so the current install needs Go:
 
 ```sh
-go run ./cmd/jikko list --dir /path/to/workspace
-go run ./cmd/jikko check --dir /path/to/workspace
-go run ./cmd/jikko serve --dir /path/to/workspace
+go install github.com/KakkoiDev/jikko/cmd/jikko@latest
 ```
 
-Open the address printed by `serve` (currently `http://127.0.0.1:8080` by default).
-Log in with a token from `jikko auth create` to edit: every page has a detail
-view with its rendered Markdown, properties, backlinks, and a discussion
-sidebar, and those who may change it get a fields-and-body editor, a raw source
-editor, and comment, reply, and resolve forms. A save made against an old
-revision is merged with the concurrent change or shown as a side-by-side
-conflict to settle. Views render as boards, tables, or lists.
-It binds to localhost and has no transport security of its own; put it behind a
-TLS-terminating reverse proxy and pass `--behind-proxy` to reach it from
-elsewhere.
+Every command below runs inside the workspace directory; pass `--dir PATH`
+to run it from elsewhere. Commands that act as somebody read `JIKKO_TOKEN`
+(or `--token`). The whole sequence is run by `TestQuickstart` in
+`cmd/jikko/main_test.go`, so it stays true.
+
+### 1. Create a workspace
+
+`init` makes the directory, runs `git init`, ignores `.auth.md` and `.data/`,
+writes your identity page, a welcome page, and an `open-work` view, and prints
+a token for you on standard output. It never overwrites a file, so it can be
+run again to complete a workspace. Omit `--identity` to use your user name.
+
+```sh
+export JIKKO_TOKEN="$(jikko init --dir my-work --identity alice)"
+cd my-work
+jikko tree
+```
+
+### 2. Define and track work
+
+Pages are created, changed, and committed through Jikko so references stay
+intact and history says who did what. `--commit` records each change as one
+Git commit carrying `Jikko-Actor` and `Jikko-Operation` trailers.
+
+```sh
+jikko create tasks/first --type task --body '# First task' --commit
+jikko set tasks/first assignee alice --commit
+jikko set tasks/first status doing --commit
+jikko view open-work
+jikko log
+```
+
+### 3. Serve it
+
+```sh
+jikko serve --auto-commit
+```
+
+Open the address it prints (`http://127.0.0.1:8080` by default) and log in
+with your token. Every page has a rendered view with its properties, backlinks,
+and discussion, and those who may change it get a fields-and-body editor, a raw
+source editor, and comment forms. `--auto-commit` records browser changes the
+way `--commit` does on the command line. The server binds to localhost and has
+no transport security of its own; put it behind a TLS-terminating reverse proxy
+and pass `--behind-proxy` to reach it from elsewhere.
+
+### 4. Bring in an agent
+
+An agent is an ordinary individual identity with its own credential. Address it
+with a mention or assign it work:
+
+```sh
+jikko create codex --type identity --body '# Codex' --commit
+jikko set tasks/first assignee codex --commit
+jikko comment add tasks/first 'First task' '@codex please draft the plan.' --commit
+export JIKKO_TOKEN="$(jikko auth create codex)"
+```
+
+The agent's loop is: find what addresses it, read before acting, act through
+semantic operations, and prove it with commits. See [agent.md](agent.md).
+
+```sh
+jikko mentions --json
+jikko list --assignee me --json
+jikko show tasks/first --json
+jikko comment reply tasks/first c1 'Drafting now.' --commit
+jikko comment resolve tasks/first c1 --commit
+jikko set tasks/first status done --commit
+jikko log tasks/first
+```
+
+`check` would have warned had the task been closed with the thread still
+open: completion is the author's call, but what is unmet is always surfaced.
+
+`mentions --since <rev>` limits the loop to pages changed since a commit, and
+`auth list` / `auth revoke <identity> --id <id>` manage the agent's credentials.
+
+## Working with pages
 
 A normal document needs no type:
 
@@ -78,10 +144,10 @@ Compose another file with an embed:
 Then inspect the workspace:
 
 ```sh
-go run ./cmd/jikko list --dir /path/to/workspace --type task
-go run ./cmd/jikko list --dir /path/to/workspace --type task --status todo --json
-go run ./cmd/jikko show --dir /path/to/workspace session-design --json
-go run ./cmd/jikko check --dir /path/to/workspace
+jikko list --type task
+jikko list --type task --status todo --json
+jikko show session-design --json
+jikko check
 ```
 
 A view is a saved query. `jikko view` evaluates it over the pages you may read:
@@ -100,7 +166,7 @@ view:
 ```
 
 ```sh
-go run ./cmd/jikko view open-work --dir /path/to/workspace --json
+jikko view open-work --json
 ```
 
 Tasks can also name their responsibility, dependencies, and evidence with
@@ -110,14 +176,22 @@ dependencies or without what it requires (see specification §2.2).
 
 `--json` is intended for agents/scripts. Markdown remains source of truth regardless of whether a human, browser, or agent edits it.
 
+`create` takes a body on the command line, from a file, or from standard
+input, and composes the frontmatter of a task, view, or identity:
+
+```sh
+jikko create notes/talos --file notes.md
+printf '# Talos\n\nNever forget.\n' | jikko create memory/talos --file -
+jikko create views/mine --type view --body 'filter: {type: task, assignee: alice}'
+```
+
 Authenticated callers can make structured edits. A metadata mutation rewrites
 only the property it names, leaving key order, comments, YAML types, and the
 Markdown body untouched:
 
 ```sh
-export JIKKO_TOKEN="$(go run ./cmd/jikko auth create alice --dir /path/to/workspace)"
-go run ./cmd/jikko set session-design status doing --dir /path/to/workspace
-go run ./cmd/jikko perm session-design read alice maintainers --dir /path/to/workspace
+jikko set session-design status doing
+jikko perm session-design read alice maintainers
 ```
 
 `set` refuses to touch `permissions`, because access-control policy is a
@@ -129,10 +203,10 @@ administrator.
 Pages are renamed and deleted through Jikko so references stay intact:
 
 ```sh
-go run ./cmd/jikko rename session-design architecture/sessions --dir /path/to/workspace
-go run ./cmd/jikko rename session-design old --no-rewrite --dir /path/to/workspace
-go run ./cmd/jikko delete old-notes --dir /path/to/workspace
-go run ./cmd/jikko delete former-member --prune --dir /path/to/workspace
+jikko rename session-design architecture/sessions
+jikko rename session-design old --no-rewrite
+jikko delete old-notes
+jikko delete former-member --prune
 ```
 
 `rename` rewrites every `[[link]]`, `![[embed]]`, and, for an identity, every
@@ -146,8 +220,8 @@ Files are uploaded through the same operation from the CLI and the browser,
 up to a configurable maximum size (25 MiB by default):
 
 ```sh
-go run ./cmd/jikko upload ./diagram.png --into architecture --dir /path/to/workspace
-go run ./cmd/jikko upload ./recording.mp4 --as media/demo.mp4 --max-upload 50M --dir /path/to/workspace
+jikko upload ./diagram.png --into architecture
+jikko upload ./recording.mp4 --as media/demo.mp4 --max-upload 50M
 ```
 
 Whole-page edits carry the revision they were based on. When the page changed
@@ -156,9 +230,9 @@ body line by line -- using the base revision you send or finds in Git history,
 and returns a structured conflict instead of overwriting when they overlap:
 
 ```sh
-go run ./cmd/jikko show plan --raw --dir /path/to/workspace > plan.md   # prints the rev on stderr
+jikko show plan --raw > plan.md   # prints the rev on stderr
 cp plan.md plan.base.md && $EDITOR plan.md
-go run ./cmd/jikko save plan --rev <rev> --file plan.md --base plan.base.md --json --dir /path/to/workspace
+jikko save plan --rev <rev> --file plan.md --base plan.base.md --json
 ```
 
 `check` reports unresolved references together with workspace problems —
@@ -167,7 +241,25 @@ definition, broken work-model references, membership cycles,
 and access policies naming identities that do not resolve. A problem is
 reported rather than fatal, so one bad file never makes the rest of a workspace
 unreadable, but a file whose access policy cannot be evaluated is denied to
-everyone until it is fixed.
+everyone until it is fixed. `check` and `serve` also warn when the workspace
+is not Git-backed, since history, audit, and three-way merge then have nothing
+to work from.
+
+### History
+
+Git is the history substrate (specification §10). `jikko commit <message>`
+records every current change; `--commit` on a mutating command, and
+`serve --auto-commit`, record each semantic mutation as its own commit limited
+to the files it touched, so an upload and the embed it inserts are one history
+event. Commits carry `Jikko-Actor` and `Jikko-Operation` trailers and keep
+your Git author identity; `.auth.md` is never staged. `jikko log [page]` reads
+the trailers back, following a page across renames:
+
+```sh
+jikko commit 'Import the Q4 plan' --operation import
+jikko upload ./chart.png --into plan --commit
+jikko log plan --json
+```
 
 ### Browser/WASM and portable workspaces
 
@@ -187,33 +279,34 @@ jikko export --dir /path/to/workspace --output workspace.zip
 
 The ZIP contains source and assets but deliberately excludes Git internals, derived `.data`, and credentials in `.auth.md`. The browser API can produce/download the same ZIP. See [browser/README.md](browser/README.md).
 
-> **Current limitation:** upload progress, drag and drop, and paste; Mermaid diagram rendering (source is shown), live in-place editing of embedded pages, and automatic Git commits are roadmap work. An open page or editor is told once when its page changes on disk; it is not refreshed in place.
+> **Current limitation:** upload progress, drag and drop, and paste; Mermaid diagram rendering (source is shown), and live in-place editing of embedded pages are roadmap work. An open page or editor is told once when its page changes on disk; it is not refreshed in place.
 
 ## Agent workspace operations
 
 Agents should discover context explicitly rather than receiving a heuristic context dump. Jikko exposes the permission-filtered workspace and lets the authenticated model decide what to read:
 
 ```sh
-jikko tree --dir /path/to/workspace --json
-jikko show identity/cassian strategy/current intelligence/malrec --dir /path/to/workspace --json
-jikko mentions --dir /path/to/workspace --json
-jikko create memory/talos --dir /path/to/workspace --body '# Talos\nNever forget.'
-jikko create tasks/defend-sol --dir /path/to/workspace --type task --body '# Defend Sol'
-jikko comment add tasks/defend-sol 'Defend Sol' 'Which fleet?' --dir /path/to/workspace
-jikko comment list --dir /path/to/workspace --json
+jikko tree --json
+jikko mentions --since HEAD~5 --json
+jikko list --assignee me --type task --status todo --json
+jikko show identity/cassian strategy/current intelligence/malrec --json
+printf '# Talos\n\nNever forget.\n' | jikko create memory/talos --file - --commit
+jikko create tasks/defend-sol --type task --body '# Defend Sol' --commit
+jikko comment add tasks/defend-sol 'Defend Sol' 'Which fleet?' --commit --json
+jikko comment list --json
 ```
 
-`tree` never includes pages the authenticated identity cannot read, so it does not disclose forbidden paths. `show` accepts one or many references for efficient batch retrieval. `mentions` derives direct and transitive group mentions from Markdown; no duplicate inbox is stored. Creation remains source-first Markdown and is validated before the workspace is refreshed.
+`tree` never includes pages the authenticated identity cannot read, so it does not disclose forbidden paths. `show` accepts one or many references for efficient batch retrieval. `mentions` derives direct and transitive group mentions from Markdown and reports the line and comment thread of each; no duplicate inbox is stored. `--since <rev>` narrows it to pages changed since a Git revision (a workspace without Git lists every mention and says so). Creation remains source-first Markdown and is validated before the workspace is refreshed.
 
 Identity is authentication context, not an automatic prompt dump: the harness tells an agent which Identity it authenticated as, while the agent may read that Identity page when it needs its authored biography, role, or other knowledge.
 
-Git-backed workspaces can record a logical batch of semantic mutations with actor attribution:
+Git-backed workspaces record each semantic mutation as an attributed commit with `--commit`, or a logical batch with `jikko commit`:
 
 ```sh
 jikko commit --operation agent-turn 'Cassian turn 428'
 ```
 
-The commit carries `Jikko-Actor` and `Jikko-Operation` trailers. Git remains optional and Markdown remains authoritative.
+The commit carries `Jikko-Actor` and `Jikko-Operation` trailers. Git remains optional and Markdown remains authoritative. See [agent.md](agent.md) for the full agent guide.
 
 ## Core model
 

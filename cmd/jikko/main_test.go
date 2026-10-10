@@ -6,12 +6,18 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // cli runs one command with stdout and stderr captured. Commands write to the
@@ -1217,4 +1223,215 @@ func TestUploadCommand(t *testing.T) {
 			t.Errorf("parseSize(%q) accepted", bad)
 		}
 	}
+}
+
+// TestQuickstart runs the README's Quickstart section, line by line, against
+// a temporary directory, so the documented commands cannot drift from the
+// program. It understands the little shell the section uses: jikko
+// commands, cd, and export NAME="$(jikko ...)".
+func TestQuickstart(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := quickstartLines(string(readme))
+	if len(lines) < 15 {
+		t.Fatalf("the Quickstart section has only %d commands:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	t.Chdir(t.TempDir())
+	t.Setenv("JIKKO_TOKEN", "")
+	t.Setenv("JIKKO_MAX_UPLOAD", "")
+	ran := map[string]bool{}
+	for _, line := range lines {
+		args, err := splitShell(line)
+		if err != nil || len(args) == 0 {
+			t.Fatalf("%q: %v", line, err)
+		}
+		switch args[0] {
+		case "go": // the install instruction
+		case "cd":
+			t.Chdir(args[1])
+		case "export":
+			name, value, ok := strings.Cut(args[1], "=")
+			if !ok {
+				t.Fatalf("%q: not an assignment", line)
+			}
+			if inner, isSubst := strings.CutPrefix(value, "$("); isSubst {
+				inner = strings.TrimSuffix(inner, ")")
+				innerArgs, err := splitShell(inner)
+				if err != nil || len(innerArgs) < 2 || innerArgs[0] != "jikko" {
+					t.Fatalf("%q: unsupported substitution", line)
+				}
+				value = strings.TrimSpace(quickstartRun(t, line, innerArgs[1:]))
+				ran[innerArgs[1]] = true
+			}
+			t.Setenv(name, value)
+		case "jikko":
+			quickstartRun(t, line, args[1:])
+			ran[args[1]] = true
+		default:
+			t.Fatalf("%q: the quickstart runner does not know this command", line)
+		}
+	}
+	for _, want := range []string{"init", "create", "set", "view", "log", "serve", "auth", "mentions", "list", "show", "comment"} {
+		if !ran[want] {
+			t.Errorf("the Quickstart never runs jikko %s", want)
+		}
+	}
+	// The agent finished the task and every step is attributed history.
+	b, err := os.ReadFile("tasks/first.md")
+	if err != nil || !strings.Contains(string(b), "status: done") {
+		t.Fatalf("tasks/first.md = %q (%v)", b, err)
+	}
+	out, err := exec.Command("git", "log", "--format=%(trailers:key=Jikko-Actor,valueonly)").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	actors := strings.Fields(string(out))
+	if len(actors) < 7 || !slices.Contains(actors, "alice") || !slices.Contains(actors, "codex") {
+		t.Fatalf("actors in history = %v", actors)
+	}
+	status, _ := exec.Command("git", "status", "--porcelain").CombinedOutput()
+	if strings.Contains(string(status), ".auth.md") {
+		t.Fatalf("credentials visible to git: %q", status)
+	}
+	if out := mustCLI(t, check); !strings.HasPrefix(out, "ok:") {
+		t.Fatalf("check after the quickstart = %q", out)
+	}
+}
+
+// quickstartRun runs one documented jikko command. serve blocks, so it is
+// started on an ephemeral port and probed over HTTP instead.
+func quickstartRun(t *testing.T, line string, args []string) string {
+	t.Helper()
+	if args[0] == "serve" {
+		quickstartServe(t, append(args[1:], "--addr", "127.0.0.1:0"))
+		return ""
+	}
+	fn, ok := commands[args[0]]
+	if !ok {
+		t.Fatalf("%q: unknown command", line)
+	}
+	out, errOut, err := cli(t, fn, args[1:]...)
+	if err != nil {
+		t.Fatalf("%q: %v\n%s", line, err, errOut)
+	}
+	return out
+}
+
+func quickstartServe(t *testing.T, args []string) {
+	t.Helper()
+	var logs lockedBuffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	go func() {
+		if err := serve(args); err != nil {
+			logs.WriteString("serve failed: " + err.Error())
+		}
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if m := regexp.MustCompile(`serving .* at (http://\S+)`).FindStringSubmatch(logs.String()); m != nil {
+			res, err := http.Get(m[1] + "/")
+			if err != nil {
+				t.Fatalf("GET %s: %v", m[1], err)
+			}
+			res.Body.Close()
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s: %s", m[1], res.Status)
+			}
+			return
+		}
+		if time.Now().After(deadline) || strings.Contains(logs.String(), "serve failed") {
+			t.Fatalf("serve did not come up: %q", logs.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) WriteString(s string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.b.WriteString(s)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// quickstartLines returns the shell lines of the README's Quickstart
+// section: every line inside a ```sh block before the next top-level
+// heading.
+func quickstartLines(readme string) []string {
+	var out []string
+	inSection, inBlock := false, false
+	for _, line := range strings.Split(readme, "\n") {
+		switch {
+		case strings.HasPrefix(line, "## "):
+			inSection = strings.HasPrefix(line, "## Quickstart")
+		case !inSection:
+		case strings.HasPrefix(line, "```"):
+			inBlock = !inBlock && strings.TrimPrefix(line, "```") == "sh"
+		case inBlock && strings.TrimSpace(line) != "":
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// splitShell splits a command line the way a POSIX shell would for the
+// subset the README uses: words, single and double quotes, and a trailing
+// # comment. Nothing is expanded.
+func splitShell(line string) ([]string, error) {
+	var args []string
+	var cur strings.Builder
+	quote := byte(0)
+	word := false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else {
+				cur.WriteByte(c)
+			}
+		case c == '\'' || c == '"':
+			quote, word = c, true
+		case c == '#' && !word:
+			i = len(line)
+		case c == ' ' || c == '\t':
+			if word {
+				args = append(args, cur.String())
+				cur.Reset()
+				word = false
+			}
+		default:
+			cur.WriteByte(c)
+			word = true
+		}
+	}
+	if quote != 0 {
+		return nil, errors.New("unterminated quote")
+	}
+	if word {
+		args = append(args, cur.String())
+	}
+	return args, nil
 }
