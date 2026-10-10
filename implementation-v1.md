@@ -23,7 +23,9 @@ Implemented in the Go core:
 - a browser interface with page detail, fields and source editing against a revision, side-by-side conflict resolution, and comment add/reply/resolve, protected by anti-forgery tokens and a strict CSP, over a Markdown renderer that never passes raw HTML through (specification §16.1);
 - uploads with a configurable maximum size, embedded into a page in the same operation, from the CLI and the browser (specification §12.1);
 - three-way merge of stale edits with structured, per-key and per-region conflicts (`jikko save`, specification §11.1);
-- semantic rename that rewrites links, embeds, memberships, access policies, assignees, mentions, and work-model references in one staged operation, and deletion that refuses or explicitly prunes inbound membership and policy references (specification §7.1).
+- semantic rename that rewrites links, embeds, memberships, access policies, assignees, mentions, and work-model references in one staged operation, and deletion that refuses or explicitly prunes inbound membership and policy references (specification §7.1);
+- attributed history: every staged mutation names its operation and can be recorded as one Git commit limited to the files it touched, with `Jikko-Actor` and `Jikko-Operation` trailers and the user's own Git author identity (`--commit`, `serve --auto-commit`, `jikko commit`, `jikko log`; specification §10.1);
+- workspace bootstrap (`jikko init`), credential listing and per-credential revocation, and agent queries for mentions with their lines and comment threads, pages changed since a revision, and pages assigned to an identity.
 
 `CanChangeMembers` remains the conservative pre-check it always was: changing a group that participates in ACLs requires effective `admin` on every affected file.
 
@@ -47,7 +49,7 @@ The next runtime layer must enforce the documented work model without adding pag
 - proof references through ordinary links, embeds, commits, tests, measurements, files, external references, or approval (implemented: `assignee`, `depends_on`, `blocked_by`, `proof`, validated by `jikko check`, specification §2.2);
 - warnings or rejection for completion when configured requirements remain unmet (implemented as warnings through a Task's `requires`);
 - views evaluated over readable pages with filter, sort, and grouping (implemented: `jikko view`, specification §3.3.1);
-- actor-attributed logical mutations and Git-backed audit history;
-- onboarding and agent guidance that make Jikko the authoritative workspace.
+- actor-attributed logical mutations and Git-backed audit history (implemented: `--commit`, `serve --auto-commit`, `jikko log`, specification §10.1);
+- onboarding and agent guidance that make Jikko the authoritative workspace (implemented: `jikko init`, the README quickstart, and `agent.md`).
 
 Claim, checkpoint, evidence, decision, and event remain runtime concepts or conventions over Documents, Tasks, comments, references, and history. They do not become additional primitives.

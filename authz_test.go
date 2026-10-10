@@ -505,3 +505,52 @@ func TestConcurrentCredentialCreationKeepsEveryToken(t *testing.T) {
 		t.Fatalf(".auth.md mode = %v", info.Mode().Perm())
 	}
 }
+
+func TestCredentialsListAndRevokeOne(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "alice.md", "---\ntype: identity\n---\n")
+	write(t, root, "bob.md", "---\ntype: identity\n---\n")
+	w, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list, err := w.Credentials(); err != nil || len(list) != 0 {
+		t.Fatalf("empty list = %v, %v", list, err)
+	}
+	first, _ := w.CreateCredential("alice")
+	second, _ := w.CreateCredential("alice")
+	bobs, _ := w.CreateCredential("bob")
+	list, err := w.Credentials()
+	if err != nil || len(list) != 3 {
+		t.Fatalf("list = %v, %v", list, err)
+	}
+	if list[0].Identity != "alice" || len(list[0].ID) != credentialIDLength || list[0].Created == "" || list[0].ID == list[1].ID {
+		t.Fatalf("entries = %+v", list)
+	}
+	if strings.Contains(list[0].ID, first) || list[0].ID == tokenHash(first) {
+		t.Fatal("the id discloses the token or the full hash")
+	}
+	if err := w.RevokeCredential("alice", list[0].ID[:4]); err == nil {
+		t.Fatal("a short id was accepted")
+	}
+	if err := w.RevokeCredential("bob", list[0].ID); err == nil {
+		t.Fatal("an id of another identity was accepted")
+	}
+	if err := w.RevokeCredential("alice", "ffffffffffff"); err == nil {
+		t.Fatal("an unknown id was accepted")
+	}
+	if err := w.RevokeCredential("alice", list[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Authenticate(first); err == nil {
+		t.Fatal("revoked token still authenticates")
+	}
+	for _, token := range []string{second, bobs} {
+		if _, err := w.Authenticate(token); err != nil {
+			t.Fatalf("other credential revoked too: %v", err)
+		}
+	}
+	if list, _ := w.Credentials(); len(list) != 2 {
+		t.Fatalf("list after revoke = %+v", list)
+	}
+}
