@@ -22,6 +22,7 @@ var commands = map[string]func([]string) error{
 	"comment": comment, "rename": rename, "delete": deletePage,
 	"view": view, "save": save, "upload": upload,
 	"init": initWorkspace, "log": logHistory, "version": printVersion,
+	"web": web, "identity": identity,
 }
 
 // help reads commands, so it is registered after the map is built.

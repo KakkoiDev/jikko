@@ -137,6 +137,28 @@ unless the body's frontmatter sets one; a view's body is its frontmatter.`,
 		short: "serve the workspace over HTTP",
 		long:  "--auto-commit records every change made through the browser as an attributed Git commit.",
 	},
+	"web": {
+		use:   []string{"web [--addr HOST:PORT] [--max-upload SIZE] [--behind-proxy] [--auto-commit] [--no-open]"},
+		short: "serve the workspace and open it in the browser",
+		long:  "Every serve flag is accepted and forwarded. --no-open only serves.",
+	},
+	"identity": {
+		use: []string{
+			"identity list [--json]",
+			"identity <name> status [--json]",
+			"identity <name> start [--runner CMD] [--sandbox DIR] [--interval 60s] [--once] [--token T]",
+			"identity <name> stop",
+		},
+		short: "run an agent as an identity, or see who is running and on what",
+		long: `start hands every todo task assigned to the identity (directly or through a
+group) to the runner executable (--runner, or JIKKO_RUNNER), one at a time,
+then polls again every --interval; --once does a single pass. The runner
+starts in <sandbox>/<task> (default <workspace>/.data/work/<identity>) with
+JIKKO_DIR, JIKKO_TOKEN, JIKKO_IDENTITY, JIKKO_TASK, and JIKKO_BIN set. While
+it runs, its presence (idle or working, on which task) is recorded under
+.data/presence for list, status, and the web interface; stop sends SIGTERM.
+A credential is minted for the identity unless --token is given.`,
+	},
 	"version": {
 		use:   []string{"version"},
 		short: "print the version",
