@@ -14,6 +14,25 @@ document.addEventListener("selectionchange", function () {
   if (field && text && text.indexOf("\n") < 0) field.value = text;
 });
 
+// The search box on the workspace list narrows the cards to those whose text
+// contains every word typed. The list is re-rendered by a live stream, so the
+// filter is re-applied after each swap.
+function applyFilter() {
+  var box = document.getElementById("jk-search");
+  if (!box) return;
+  var words = box.value.toLowerCase().split(/\s+/).filter(Boolean);
+  document.querySelectorAll("#pages .jk-card").forEach(function (card) {
+    var text = card.textContent.toLowerCase();
+    var show = words.every(function (w) { return text.indexOf(w) >= 0; });
+    card.hidden = !show;
+  });
+}
+document.addEventListener("input", function (event) {
+  if (event.target && event.target.id === "jk-search") applyFilter();
+});
+document.addEventListener("htmx:afterSwap", applyFilter);
+document.addEventListener("htmx:sseMessage", applyFilter);
+
 // When a swap removes an element with a live stream (the page list, or the
 // change notice replacing itself), the htmx SSE extension aborts the stream's
 // fetch during its cleanup, and the read it had in flight rejects with an
