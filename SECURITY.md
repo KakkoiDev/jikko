@@ -39,6 +39,24 @@ Credential creation is a host-local administrative operation. Do not expose it
 over an untrusted remote interface: control of the workspace host is the
 security boundary for bootstrap and recovery.
 
+## Release artifacts
+
+Tagged releases are built by GitHub Actions (`.github/workflows/release.yml`)
+with GoReleaser from the tagged commit, with `CGO_ENABLED=0` and `-trimpath`,
+so a release binary can be rebuilt from source and compared. Every release
+carries a `checksums.txt` with the SHA-256 of each archive:
+
+```sh
+sha256sum -c checksums.txt --ignore-missing
+```
+
+Release binaries are not signed yet. The Homebrew formula in
+`KakkoiDev/homebrew-tap` pins the same checksums, and `go install
+github.com/KakkoiDev/jikko/cmd/jikko@<tag>` builds from the tagged source
+with the Go module checksum database as its integrity check. Report a
+release artifact that does not match its checksum the same way as a
+vulnerability.
+
 ## Serving over a network
 
 `jikko serve` binds to `127.0.0.1` by default and has no transport security of
