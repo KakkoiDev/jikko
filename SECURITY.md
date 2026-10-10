@@ -32,8 +32,11 @@ It is harness-local state: it is gitignored, is not portable workspace source,
 and is not disposable `.data`.
 
 Adding `.auth.md` to `.gitignore` does not remove hashes already committed.
-`jikko auth create` warns when the file is tracked by Git; if you see that
-warning, untrack the file and rotate every token.
+`jikko auth create` and `jikko commit` warn when the file is tracked by Git,
+and no Jikko commit ever stages it; if you see that warning, untrack the file
+and rotate every token. `jikko auth list` shows each credential's identity,
+id, and creation time, and `jikko auth revoke <identity> --id <id>` withdraws
+one token without disturbing the others.
 
 Credential creation is a host-local administrative operation. Do not expose it
 over an untrusted remote interface: control of the workspace host is the

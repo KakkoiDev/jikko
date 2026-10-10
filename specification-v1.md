@@ -293,6 +293,14 @@ Where this section leaves room, the reference harness takes the simplest reading
 
 ## 9. Identity, mentions, assignment, and notifications
 
+Identity, authentication, and authorization are specified in
+`identity-permissions.md`; this section keeps only what the rest of this
+document relies on. There is one actor primitive, `Identity`: an individual
+is an Identity without `members`, a group one with `members`. There are no
+namespaces and no human, agent, or group prefixes: `@alice`, `@codex`, and
+`@maintainers` address Identity pages by the same name-or-path resolution as
+links, and a path such as `@people/alice` disambiguates.
+
 Canonical mention syntax is source-native:
 
 ```md
@@ -301,7 +309,7 @@ Canonical mention syntax is source-native:
 @maintainers
 ```
 
-Namespaces keep human, agent, and group identities unambiguous. A UI MAY render friendlier labels while preserving canonical source.
+A UI MAY render friendlier labels while preserving canonical source.
 
 Mention semantics:
 
@@ -310,18 +318,29 @@ Mention semantics:
 assignee = responsibility
 ```
 
-Mentions are authored facts. Mention indexes, inboxes, notification badges, and delivery state are derived by the harness.
+Mentions are authored facts. Mention indexes, inboxes, notification badges,
+and delivery state are derived by the harness.
 
-The harness SHOULD expose current mentions to browser, CLI, and agents, for example conceptually:
+The harness SHOULD expose current mentions to browser, CLI, and agents. The
+reference harness answers for the authenticated identity, with the matching
+line and comment thread of each mention, and can limit the answer to pages
+changed since a Git revision:
 
 ```sh
-jikko mentions --for agent:codex --json
-jikko watch --for agent:codex
+jikko mentions --json
+jikko mentions --since <rev> --json
+jikko list --assignee me --json
 ```
 
-Notification delivery is not Markdown source. Browser notifications, SSE, polling, OS notifications, or future adapters are harness capabilities. Disposable runtime state MAY remember which mention event/revision was already delivered; deleting that state may cause duplicate notifications but MUST NOT lose workspace information.
+Notification delivery is not Markdown source. Browser notifications, SSE,
+polling, OS notifications, or future adapters are harness capabilities.
+Disposable runtime state MAY remember which mention event/revision was already
+delivered; deleting that state may cause duplicate notifications but MUST NOT
+lose workspace information.
 
-Groups are resolved as groups, not expanded by rewriting source mentions into individual mentions. Group membership changes therefore do not alter the historical authored intent of `@group:name`.
+Groups are resolved as groups, not expanded by rewriting source mentions into
+individual mentions. Group membership changes therefore do not alter the
+historical authored intent of `@maintainers`.
 
 ## 10. Git-backed history and audit
 
@@ -343,6 +362,13 @@ A Jikko workspace remains valid Markdown without Git, but history, audit, histor
 Successful semantic mutations SHOULD be commit-able as one logical transaction. For example, uploading an asset and inserting its embed should form one history event rather than unrelated changes.
 
 Actor attribution SHOULD be carried by the mutation context and may be stored in structured Git commit trailers such as `Jikko-Actor` and `Jikko-Operation`. Do not automatically inject `updated_by` into every Markdown file.
+
+### 10.1 Reference harness reading
+
+- **Initialization.** `jikko init` creates the workspace directory, runs `git init` unless told not to or already inside a repository, and ignores `.auth.md` and `.data/`. `jikko check` and `jikko serve` warn once, on standard error, when a workspace is not Git-backed.
+- **Transactions.** Every semantic mutation names its operation (`set-metadata`, `set-permission`, `comment-add`, `comment-reply`, `comment-resolve`, `replace-body`, `create`, `save`, `rename`, `delete`, `upload`) and the files it touches. With `--commit` on the CLI, or `serve --auto-commit`, each applied mutation is recorded as one commit limited to those files, so an upload and the embed it inserts are one history event, and anything else the user had staged is left for a later commit. A mutation that could not be recorded afterwards, because the workspace is not Git-backed, is refused before anything is written. `jikko commit <message> [--operation NAME]` records every current change as one logical batch.
+- **Attribution.** Commits carry `Jikko-Actor: <identity>` and `Jikko-Operation: <name>` trailers. The Git author and committer stay whoever Git is configured for; the harness supplies an identity only where Git has none. The operation name is a single word, so it cannot smuggle a second trailer. A tracked `.auth.md` is never staged, and the harness warns that its hashes are already in history.
+- **Reading history.** `jikko log [page] [--json]` lists commits, newest first, with their trailers and the paths they touched, following a page across renames and omitting paths of pages the caller may not read. `jikko mentions --since <rev>` uses the same history to limit an agent's attention to pages changed since its last turn.
 
 ## 11. Concurrent edits
 

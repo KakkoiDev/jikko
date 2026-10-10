@@ -1,175 +1,182 @@
-# Jikko Agent Guide
+# Using a Jikko workspace as an agent
 
-Read this first if you are an AI agent working on Jikko. For format details see `specification-v1.md`; `identity-permissions.md` is normative for identity, authentication boundaries, and authorization. Browser/product details live in `architecture-browser.md` and `ux-plan.md`.
+This guide is for an AI agent that has been given access to a Jikko workspace
+and is expected to do work in it. If you are changing Jikko itself, read
+[CONTRIBUTING.md](CONTRIBUTING.md) instead.
 
-## Core model
-
-Jikko is an executable Markdown workspace for humans and agents. Markdown files are the source of truth. The Go harness exposes the same semantics through CLI and browser.
-
-```text
-no type        -> Document
-type: task     -> Task
-type: view     -> View
-type: identity -> Identity
-```
-
-Document = information, composition, and durable discussion surface. Task = explicit actionable semantics. View = pure query + presentation hints. Identity = an addressable individual or group.
-
-> The files describe what things are and explicitly relate them. The harness determines what can be done with that information.
-
-Never create a second source of truth.
-
-## Jikko is the go-to workspace
-
-Before acting, read the relevant Jikko Documents, Tasks, comments, and Views. Conduct project discussion in Jikko comments or Documents. Record material goals, questions, decisions, progress, blockers, and evidence there as the work proceeds—not only in an external chat or a final summary.
-
-External conversations are not authoritative project state until their material outcome is incorporated into Jikko. Another human or agent must be able to continue from Jikko without access to a private context window.
-
-Use the existing model rather than inventing file types:
-
-- define work in Documents and Tasks;
-- discuss it through Documents and comments;
-- track it through Task metadata and Views;
-- prove it with links, embeds, tests, commits, measurements, files, or approval;
-- audit it through attributed semantic mutations and Git history.
-
-Claim, checkpoint, evidence, decision, and event are useful concepts, but they are not additional primitives. Express them through Task metadata/content, comments, references, and history, and use runtime semantic operations so enforcement is consistent.
-
-## Identity
-
-There are no separate Human, Agent, Group, Team, Person, or Role primitives.
-
-An Identity without `members` is an individual. An Identity with `members` is a group of identities. Groups may contain groups; membership is transitive and cycles must be detected.
-
-```md
----
-type: identity
-members:
-  - alice
-  - codex
----
-
-# Engineering
-```
-
-Human/agent/admin classifications can themselves be ordinary Identity groups. Reverse membership is derived; do not duplicate it onto member files.
-
-Identity is not authentication. Credentials and secrets do not belong in Identity Markdown merely to prove caller identity. The harness authenticates a caller and maps it to a Jikko Identity.
-
-## Mentions and responsibility
-
-Address identities directly:
-
-```md
-@alice
-@codex
-@engineering
-```
-
-Use a path when a name is ambiguous. A mention means **attention**. `assignee:` means **responsibility**. Do not treat them as equivalent. Group mentions retain the group reference rather than being rewritten to current members.
-
-Mention indexes/inboxes and notification-delivery state are derived runtime behavior.
-
-## Permissions
-
-Any Markdown file may define:
-
-```yaml
-permissions:
-  read: customers
-  comment: humans
-  write: engineering
-  admin: admins
-```
-
-A value may be one Identity or a list. Transitive membership satisfies grants.
-
-An absent permission rule imposes no Jikko-level restriction. No `permissions` means unrestricted by Jikko, though filesystem/Git/server access may still restrict access.
-
-The v1 capabilities are:
+A Jikko workspace is a directory of plain Markdown. It is the authoritative
+record of the work: goals, discussion, decisions, progress, and evidence live
+there, not in your context window. You read it before acting, you change it
+through `jikko` commands, and you leave an attributed history behind. Another
+human or agent must be able to continue from the workspace alone.
 
 ```text
-read     read/render
-comment  semantic comment operations without arbitrary content editing
-write    ordinary content/metadata mutation
-admin    access-control changes and explicit administrative operations
+no type        -> Document   information and durable discussion
+type: task     -> Task       status, assignee, dependencies, proof
+type: view     -> View       a saved query over pages
+type: identity -> Identity   an individual (you) or a group
 ```
 
-`write` must not silently grant the ability to change `permissions`. Identity membership changes that alter effective authorization are also authorization-sensitive. Never allow an actor to self-escalate by editing an ACL-bearing group Identity.
+Every command below takes `--json` for deterministic output and `--dir PATH`
+when you are not inside the workspace. `jikko help <command>` prints each
+command's forms and flags.
 
-Do not add deny rules, folder inheritance, role hierarchy, permission inheritance, or implicit ACL propagation without demonstrated need.
+## 1. Get a token
 
-Jikko ACLs govern harness operations; they do not sandbox actors with direct filesystem write access.
-
-## Source and derived state
-
-Authored/source data includes Markdown, YAML, `[[links]]`, `![[embeds]]`, Identity membership, permissions, inline unresolved comments, and `@mentions`.
-
-Backlinks, reverse identity membership, search indexes, mention indexes/inboxes, rendered views, caches, notification-delivery state, and similar runtime data are derived. Persistent `.data`, if used, must remain disposable/reproducible.
-
-Git is the reference harness substrate for audit/history/diff/three-way merge. Git does not replace Jikko semantic operations.
-
-## Comments
-
-Comments are unresolved review state inside the Markdown they discuss, not separate Comment/Message files. Current provisional source shape:
-
-```md
-This should <!--comment:c17-->update references<!--/comment:c17-->.
-
-<!--comment-thread:c17
-@codex: Please verify links and embeds.
--->
-```
-
-The exact serialization is not frozen until parser compatibility is tested. Resolving a comment removes active markup/thread after incorporating the decision; Git retains historical discussion. Do not silently delete or orphan unresolved comments.
-
-Use the semantic operations rather than writing the markup by hand. They need only the `comment` capability:
+You act as an Identity. A human creates your identity page and a credential,
+and gives you the token once:
 
 ```sh
-jikko comment add design 'update references' 'Should normal links update too?'
-jikko comment reply design c17 'Yes, links and embeds.'
-jikko comment resolve design c17
-jikko comment list [design] --json
+jikko create codex --type identity --body '# Codex' --commit
+jikko auth create codex
 ```
 
-`jikko check` warns about a Task marked done while comments remain unresolved, while its `depends_on` Tasks are unfinished, or while its `requires` (proof, assignee, review) are unmet. Record evidence in `proof:` (pages, files, URLs, `commit:<id>`); `check` validates it. Use `jikko view <view> --json` to read tracked work the way a View defines it. See specification §8.1 for the details of the serialization.
+Keep it in `JIKKO_TOKEN` (or pass `--token`). The token maps to one individual
+identity; groups cannot authenticate. Your identity page may hold a biography,
+role, or standing instructions; read it with `jikko show codex` when you need
+them. Never write the token into a page: `.auth.md` holds only hashes and is
+kept out of Git.
 
-## Go harness and mutations
+```sh
+export JIKKO_TOKEN=jk_...
+jikko tree --json          # every page you may read: path, title, type
+```
 
-The Go core owns parsing, indexing, reference resolution, backlinks, identity membership, mentions, authorization, queries, safe mutations, uploads, rename rewriting, comments, and conflict semantics. CLI and HTTP are adapters.
+`tree` is permission-filtered, so a page it does not list does not exist for
+you; asking for it fails exactly like asking for a missing page.
 
-Prefer semantic operations and deterministic `--json`. Direct Markdown edits remain valid for complex content, followed by `jikko check`.
+## 2. Find your work
 
-`jikko set` changes one ordinary property and will not touch `permissions`; use `jikko perm` for access-control policy. Both refuse a change that would introduce a workspace problem, widen access beyond what you may administer, or leave a restricted file with no administrator, and both refuse to overwrite a file that changed after you read it. Re-read the workspace and retry rather than forcing the write.
+Two queries drive the loop. Mentions are requests for your attention; the
+assignee is responsibility.
 
-`jikko check` distinguishes unresolved references from workspace problems. Treat a problem as work to do: a file whose access policy cannot be evaluated is denied to everyone until it is fixed.
+```sh
+jikko mentions --json
+jikko mentions --since <rev> --json
+jikko list --assignee me --type task --status todo --json
+jikko list --assignee me --type task --status doing --json
+```
 
-A mutation should carry authenticated actor context. Do not automatically write `updated_by` into documents. Audit attribution belongs in Git/history unless identity is part of authored meaning.
+`mentions` lists every readable page that addresses you or a group you belong
+to, with each matching line (`line` is the line in the page's source) and the
+id of the comment thread it is in, so you can reply to the right thread. With
+`--since <rev>` only pages changed since that Git revision are listed; keep the
+revision of your last turn (`jikko log --limit 1 --json`) and pass it on the
+next. A workspace without Git cannot narrow the list: `--since` is then
+ignored, every mention is listed, and a warning says so on standard error.
 
-Rename and delete through Jikko (`jikko rename`, `jikko delete`), never with `mv` or `rm`: rename rewrites safely resolvable `[[links]]`, `![[embeds]]`, memberships, policies, assignees, and mentions, and delete refuses to silently drop an identity that a group or policy names. Uploads are ordinary workspace files and use the same core operation from browser and CLI: `jikko upload <file> --into <page>` stores the file and embeds it in one step. Respect the configured maximum upload size.
+Views are the team's own queries:
 
-## Concurrency
+```sh
+jikko view open-work --json
+```
 
-Use optimistic revision checks. If source changed after read, use a three-way merge where clean; otherwise return a structured conflict. For a whole-page edit, read with `jikko show <page> --raw` (the rev is printed on stderr, or use `show --json`), keep the original as the base, and write back with `jikko save <page> --rev <rev> --file edited.md --base original.md --json`. On a conflict, nothing is written: re-read, reconcile the listed fields and regions, and save again against the new rev. Do not blindly overwrite another actor's edit. Do not add CRDT/OT infrastructure without demonstrated need.
+## 3. Read before acting
 
-## Browser rules
+```sh
+jikko show tasks/first --json                  # title, metadata, body, links, backlinks, comments, rev
+jikko show tasks/first design/plan --json      # several pages in one call
+jikko show tasks/first --raw > first.md        # exact source; the rev is printed on stderr
+jikko comment list tasks/first --json
+jikko log tasks/first --json                   # who changed it, when, through which operation
+```
+
+Follow `[[links]]` and `![[embeds]]` that matter. Read the unresolved comments:
+they are the open questions. Task metadata tells you what completion needs
+(`requires`), what blocks it (`blocked_by`, `depends_on`), and what evidence it
+already has (`proof`).
+
+## 4. Act through semantic operations
+
+Change pages through `jikko`, never with an editor, `mv`, or `rm`. The
+operations keep references intact, preserve the rest of the file byte for
+byte, check your permission, and refuse a change that would widen anyone's
+access, introduce a workspace problem, or overwrite an edit you have not seen.
+
+```sh
+jikko set tasks/first status doing --commit
+jikko set tasks/first proof 'commit:1a2b3c4d, [[load-test-results]]' --commit
+jikko comment reply tasks/first c1 'Done; see [[results]].' --commit
+jikko comment add design/plan 'retry budget' 'Three retries or five?' --commit
+jikko comment resolve design/plan c2 --commit
+jikko create notes/findings --type document --file - --commit < findings.md
+jikko create tasks/follow-up --type task --body '# Follow up' --commit
+jikko upload ./chart.png --into notes/findings --commit
+jikko rename notes/findings reports/q4-findings --commit
+jikko delete notes/scratch --commit
+```
+
+Whole-page edits are made against the revision you read, and merged three
+ways if the page changed meanwhile:
+
+```sh
+jikko show design/plan --raw > plan.md         # note the rev on stderr
+cp plan.md plan.base.md && edit plan.md
+jikko save design/plan --rev <rev> --file plan.md --base plan.base.md --json --commit
+```
+
+A conflict writes nothing and returns, as JSON, each disagreeing field and
+body region with `base`, `current`, and `yours`. Re-read, decide, and save
+again with `--against <current rev> --resolve <id>=current|yours`. Never
+overwrite another actor's edit blindly.
+
+Capabilities: `read` lets you see a page, `comment` lets you add, reply to,
+and resolve comments, `write` lets you change content and metadata, `admin`
+lets you change `permissions` (with `jikko perm`). A refusal names what you
+lack; ask a human for the grant rather than working around it.
+
+Conventions that keep the workspace honest:
+
+- Discuss in comments on the page concerned, not in a separate note.
+- Record decisions, blockers, and evidence as you go, not only at the end.
+- `@mention` for attention, `assignee` for responsibility. Do not rewrite a
+  group mention into its members.
+- Do not add `updated_by` or timestamps to pages; history carries attribution.
+- Resolve a comment only after its decision is incorporated. `jikko check`
+  warns when a Task is done while comments, dependencies, or requirements
+  remain open.
+
+## 5. Prove it
+
+Every `--commit` records the change as one Git commit limited to the files it
+touched, with `Jikko-Actor: <you>` and `Jikko-Operation: <operation>`
+trailers. Use it on each mutation, or batch a turn with `jikko commit`:
+
+```sh
+jikko commit 'Draft the Q4 plan' --operation agent-turn
+jikko log --limit 5
+```
+
+Cite evidence in the Task: a `proof` entry may be a page, a workspace file, a
+URL, or `commit:<hash>`, and `jikko check` verifies that each resolves. Then
+close the work:
+
+```sh
+jikko set tasks/first status done --commit
+jikko check
+```
+
+## Command reference
 
 ```text
-Go       = state + semantics
-Markdown = durable data
-HTML     = interactions
-HTMX 4   = requests + swaps
-SSE      = default server -> browser live updates
-hx-live  = tiny local-only browser behavior
-Basecoat = presentation
+jikko tree [--json]                                   what you may read
+jikko mentions [--since REV] [--json]                 what addresses you
+jikko list [--type T] [--status S] [--assignee ID|me] [--json]
+jikko view <view> [--json]
+jikko show <ref>... [--json] | show --raw <ref>
+jikko comment add|reply|resolve|list ... [--commit] [--json]
+jikko set <ref> <property> <value> [--commit]
+jikko create <path> [--type T] [--body MD | --file PATH|-] [--commit] [--json]
+jikko save <ref> --rev REV [--file PATH|-] [--base PATH] [--commit] [--json]
+jikko upload <file> [--into PAGE] [--as PATH] [--commit] [--json]
+jikko rename <ref> <new path> [--commit] [--json]
+jikko delete <ref> [--prune] [--commit] [--json]
+jikko commit <message> [--operation NAME] [--json]
+jikko log [page] [--limit N] [--json]
+jikko check [--json]
 ```
 
-Editing is source-first, not WYSIWYG. Render when reading; expose real Markdown in the active edit context. Embedded Markdown is visibly bordered; selecting it reveals its `![[file]]` anchor and actions to open/edit the source file.
-
-Use HTML/CSS first, then `hx-live`; add browser runtime only when accessibility/correctness justifies it.
-
-## Development bias
-
-Use composition, not inheritance. Views stay pure. Folders have no semantic meaning. Prefer readable paths over mandatory UUIDs. Preserve unknown metadata.
-
-Do not add Project, Sprint, Dashboard, Human, Agent, Group, Team, Role, Message, Chat, Comment, database, daemon, WebSocket, persistent index, CRDT, LFS, or another primitive/dependency without a concrete use case. Identity is the single actor/group primitive.
+Exit status 0 is success, 1 a refused or failed command, 2 a usage error. The
+formats of the pages are defined in [specification-v1.md](specification-v1.md);
+identity, authentication, and permissions in
+[identity-permissions.md](identity-permissions.md).
