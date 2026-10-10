@@ -3,139 +3,160 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{if .Detail}}{{.Detail.Title}} · {{else if .Edit}}Editing {{.Edit.Title}} · {{else if .New}}New page · {{else if .ForYou}}For you · {{else if .Problems}}Problems · {{end}}Jikko</title>
-<link rel="stylesheet" href="/assets/basecoat.min.css">
-<link rel="stylesheet" href="/assets/jikko.css">
-<script src="/assets/htmx.min.js"></script>
-<script src="/assets/jikko.js" defer></script>
+<meta name="color-scheme" content="light dark">
+<title>{{if .Detail}}{{.Detail.Title}} · {{else if .Edit}}Editing {{.Edit.Title}} · {{else if .New}}New page · {{else if .Problems}}Problems · {{else if .Message}}{{statusTitle .Status}} · {{end}}Jikko</title>
+<link rel="stylesheet" href="{{asset "jikko.css"}}">
+<script src="{{asset "htmx.min.js"}}"></script>
+<script src="{{asset "jikko.js"}}" defer></script>
 </head>
-<body class="bg-background text-foreground">
-<main class="jk-main">
-<header class="jk-top">
-<div><h1 class="jk-brand"><a href="/">Jikko</a></h1><nav class="jk-nav" aria-label="Sections"><a href="/">Workspace</a>{{if .Actor}} <a href="/me">For you</a>{{end}} <a href="/problems">Problems</a>{{if .Actor}} <a href="/new">New page</a>{{end}}</nav></div>
-{{if .Actor}}<form method="post" action="/logout" class="jk-inline"><input type="hidden" name="_csrf" value="{{.CSRF}}"><span class="jk-actor">{{.Actor}}</span> <button class="btn" data-variant="outline">Log out</button></form>
-{{else}}<div class="jk-login"><form method="post" action="/login" class="jk-inline"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input class="input" name="token" type="password" placeholder="Token" aria-label="Token" required autocomplete="current-password"><button class="btn">Log in</button></form><p class="jk-help">No token yet? On the host, run <code>jikko auth create &lt;you&gt;</code> and paste the token it prints.</p></div>{{end}}
-</header>
-{{if .Detail}}{{template "detail" .}}{{else if .Edit}}{{template "edit" .}}{{else if .New}}{{template "new" .}}{{else if .ForYou}}{{template "foryou" .}}{{else if .Problems}}{{template "problems" .}}{{else if .Report}}{{template "report" .}}{{else if .Message}}{{template "message" .}}{{else if eq .Total 0}}{{template "guide" .}}{{else}}<div class="jk-filters">
-<nav aria-label="Type">{{range .Filters}}<button class="btn" data-variant="{{if .Active}}primary{{else}}outline{{end}}" hx-get="{{.URL}}" hx-target="#pages" hx-swap="outerHTML">{{.Label}}</button> {{end}}</nav>
-<form method="get" action="/" class="jk-inline jk-search" role="search"><input class="input" type="search" name="q" value="{{.Search}}" placeholder="Search title or path" aria-label="Search title or path"><button class="btn" data-variant="outline">Search</button>{{if .Search}} <a class="btn" data-variant="ghost" href="/">Clear</a>{{end}}</form>
-</div>
-{{template "pages" .}}{{end}}
+<body>
+<div class="jk-shell">
+<header class="jk-topbar"><div>
+<a class="jk-brand" href="/">Jikko</a>
+<nav class="jk-nav" aria-label="Workspace">
+<a href="/" {{if and (not .Detail) (not .Edit) (eq .Query "")}}aria-current="page"{{end}}>Home</a>
+<a href="/?type=task" {{if or (eq .Query "?type=task") (and .Detail (eq .Detail.Section "Tasks"))}}aria-current="page"{{end}}>Tasks</a>
+<a href="/?type=identity" {{if or (eq .Query "?type=identity") (and .Detail (eq .Detail.Section "Identities"))}}aria-current="page"{{end}}>Identities</a>
+<a href="/?type=view" {{if or (eq .Query "?type=view") (and .Detail (eq .Detail.Section "Views"))}}aria-current="page"{{end}}>Views</a>
+<a href="/problems" {{if .Problems}}aria-current="page"{{end}}>Problems</a>
+{{if .Actor}}<a href="/new" {{if .New}}aria-current="page"{{end}}>New page</a>{{end}}
+</nav>
+{{if .Actor}}<form method="post" action="/logout" class="jk-session"><input type="hidden" name="_csrf" value="{{.CSRF}}"><a class="jk-me" href="{{.ActorURL}}"><span class="jk-avatar" data-who="human">{{.ActorInitials}}</span>{{.ActorName}} <span class="jk-muted">· here</span></a><button class="jk-btn" data-size="sm">Log out</button></form>
+{{else}}<div class="jk-login"><form method="post" action="/login" class="jk-session"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input class="jk-input jk-token" name="token" type="password" placeholder="Token" aria-label="Token" required autocomplete="current-password"><button class="jk-btn" data-variant="primary" data-size="sm">Log in</button></form><p class="jk-xs jk-help">No token yet? On the host, run <code>jikko auth create &lt;you&gt;</code> and paste the token it prints.</p></div>{{end}}
+</div></header>
+<main class="jk-main{{if and (not .Detail) (not .Edit) (not .Message) (not .New) (not .Problems) (not .Report)}} jk-home{{end}}">
+{{if .Detail}}{{template "detail" .}}{{else if .Edit}}{{template "edit" .}}{{else if .New}}{{template "new" .}}{{else if .Problems}}{{template "problems" .}}{{else if .Report}}{{template "report" .}}{{else if .Message}}{{template "message" .}}{{else}}{{template "pages" .}}{{end}}
 </main>
+</div>
 </body>
 </html>{{end}}
 
-{{define "pages"}}<section id="pages" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML"><div class="item-group">{{range .Pages}}<article class="item" data-variant="outline"><section><h3><a href="{{pageURL .Path}}">{{.Title}}</a>{{if .Comments}} <span class="badge jk-comment-count" data-variant="outline" title="unresolved comments">{{len .Comments}} open</span>{{end}}</h3><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.{{if .Query}} Nothing matches the filter.{{else if not .Actor}} Log in to see pages restricted to identities.{{end}}</p></section></article>{{end}}</div></section>{{end}}
+{{define "pages"}}<section id="pages" class="jk-col" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML">
+{{if .Empty}}{{template "welcome" .}}{{else}}
+{{if .Needs}}<section class="jk-needs" aria-labelledby="needs-h"><div class="jk-between"><h2 id="needs-h">Needs you</h2><span class="jk-small jk-muted">{{len .Needs}} {{if eq (len .Needs) 1}}thing{{else}}things{{end}} · updated live</span></div>
+<div class="jk-needs-box">{{range .Needs}}<article class="jk-need">{{if .State}}<span class="jk-dot" data-state="{{.State}}" aria-hidden="true"></span>{{else if .Who}}<span class="jk-avatar" data-who="{{.WhoKind}}" aria-hidden="true">{{.WhoInitials}}</span>{{else}}<span class="jk-dot" data-state="offline" aria-hidden="true"></span>{{end}}<div><span class="jk-why">{{.Why}}</span><h3><a href="{{.URL}}">{{.Title}}</a>{{if .Status}} <span class="jk-status" data-status="{{.Status}}">{{.Status}}</span>{{end}}</h3><p>{{if .Who}}<span class="jk-name" data-who="{{.WhoKind}}">{{.Who}}</span>{{if .State}} {{.Text}}{{else}}: “{{.Text}}”{{end}}{{else}}{{.Text}}{{end}}</p></div><a class="jk-btn" data-size="sm" href="{{.URL}}">{{.Action}}</a></article>{{end}}</div></section>
+{{else if .Actor}}<p class="jk-quiet">Nothing needs you right now. Blocked tasks, results waiting for review, and idle agents appear here.</p>{{end}}
+<section class="jk-pages" aria-labelledby="pages-h"><div class="jk-toolbar"><h2 id="pages-h">Pages <span>{{len .Cards}}</span></h2><div><nav class="jk-filters" aria-label="Page types"><button type="button" aria-current="{{if eq .Query ""}}true{{else}}false{{end}}" hx-get="/pages" hx-target="#pages" hx-swap="outerHTML" hx-push-url="/">All</button><button type="button" aria-current="{{if eq .Query "?type=task"}}true{{else}}false{{end}}" hx-get="/pages?type=task" hx-target="#pages" hx-swap="outerHTML" hx-push-url="/?type=task">Tasks</button><button type="button" aria-current="{{if eq .Query "?type=document"}}true{{else}}false{{end}}" hx-get="/pages?type=document" hx-target="#pages" hx-swap="outerHTML" hx-push-url="/?type=document">Documents</button><button type="button" aria-current="{{if eq .Query "?type=view"}}true{{else}}false{{end}}" hx-get="/pages?type=view" hx-target="#pages" hx-swap="outerHTML" hx-push-url="/?type=view">Views</button><button type="button" aria-current="{{if eq .Query "?type=identity"}}true{{else}}false{{end}}" hx-get="/pages?type=identity" hx-target="#pages" hx-swap="outerHTML" hx-push-url="/?type=identity">Identities</button></nav><label class="jk-sr" for="jk-search">Filter pages</label><input class="jk-input" id="jk-search" type="search" placeholder="Filter…"></div></div>
+<ul class="jk-list">{{range .Cards}}<li class="jk-card" data-kind="{{.Kind}}"><span class="jk-kind" data-kind="{{.Kind}}">{{if eq (printf "%s" .Kind) "document"}}doc{{else}}{{.Kind}}{{end}}</span><div><h3><a href="{{pageURL .Path}}">{{.Title}}</a></h3><p class="jk-meta">{{if eq (printf "%s" .Kind) "task"}}{{if .Status}}<span class="jk-status" data-status="{{.Status}}">{{.Status}}</span>{{end}}<span>{{if .AssigneeState}}<span class="jk-dot" data-state="{{.AssigneeState}}" data-size="sm"></span>{{end}}{{.Assignee}}{{if eq .AssigneeState "working"}} · working{{else if eq .AssigneeState "idle"}} · idle{{end}}</span>{{if .Due}}<span>due {{.Due}}</span>{{end}}{{end}}{{if .Extra}}<span>{{.Extra}}</span>{{end}}<span class="jk-path">{{.Path}}</span></p></div></li>{{else}}<li class="jk-card"><div><p class="jk-empty">No pages.</p></div></li>{{end}}</ul></section>
+{{end}}
+</section>
+{{template "here" .}}{{end}}
 
-{{define "message"}}<section id="page" class="jk-page jk-message">
-<div class="alert" data-variant="destructive" role="alert"><section><h2>{{statusTitle .Status}}</h2><p>{{.Message}}</p></section></div>
-{{if eq .Status 401}}<p>Log in with the form above. No token yet? On the host, run <code>jikko auth create &lt;you&gt;</code> and paste the token it prints.</p>
-{{else if eq .Status 403}}<p>If you were sent here from a form, the page it was on may be stale: go back, reload it, and try again. If you believe you should have access, ask an administrator of the page to grant it with <code>jikko perm</code>.</p>
-{{else if eq .Status 404}}<p>Check the address, or find the page from the workspace list. Pages you may not read look the same as pages that do not exist.</p>
-{{else if eq .Status 413}}<p>Make the request smaller, or ask the host to raise the limit (<code>jikko serve --max-upload</code> for uploads).</p>
-{{else if eq .Status 503}}<p>The server could not read its workspace directory. The detail is in the server log on the host; the server keeps running and will serve the workspace once it is readable again.</p>{{end}}
-<nav class="jk-actions"><a class="btn" data-variant="outline" href="/">Back to the workspace</a>{{if .Actor}} <a class="btn" data-variant="ghost" href="/me">For you</a>{{end}}</nav>
+{{define "welcome"}}<section class="jk-welcome jk-stack"><h2>This workspace is empty.</h2><p>Jikko is a folder of Markdown files that you and your agents work in together. Every page is one file; every change is one Git commit. Four kinds of page exist.</p></section>
+<ul class="jk-kinds">
+<li class="jk-card" data-kind="column"><span class="jk-kind" data-kind="document">doc</span><h3>Document</h3><p class="jk-small jk-text-2">Prose, designs, notes. Link pages with <code class="jk-inline-code">[[name]]</code>, embed them with <code class="jk-inline-code">![[name]]</code>.</p></li>
+<li class="jk-card" data-kind="column"><span class="jk-kind" data-kind="task">task</span><h3>Task</h3><p class="jk-small jk-text-2">Work with a status, an assignee and a due date. Agents move it from todo to doing to done and comment as they go.</p></li>
+<li class="jk-card" data-kind="column"><span class="jk-kind" data-kind="identity">identity</span><h3>Identity</h3><p class="jk-small jk-text-2">A person, an agent, or a group. Its page shows what it is doing now and what it did.</p></li>
+<li class="jk-card" data-kind="column"><span class="jk-kind" data-kind="view">view</span><h3>View</h3><p class="jk-small jk-text-2">A saved query over pages, shown as a list, a table or a board. Derived, never authored.</p></li>
+</ul>
+<section class="jk-terminal"><h3 class="jk-h2">From the terminal</h3><pre><span>$</span> jikko init --me alice
+<span>$</span> jikko auth create alice
+<span>$</span> jikko create tasks/first --type task --body '# First task' --commit
+<span>$</span> jikko identity gemma start</pre><p class="jk-small jk-muted"><code>init</code> writes your identity page; <code>auth create</code> prints the token the login box above takes. Once logged in, <em>New page</em> creates pages here. This page updates by itself when a file appears.</p></section>{{end}}
+
+{{define "here"}}<aside class="jk-here" aria-label="Who is here"><div class="jk-between"><h2 class="jk-h2">Who’s here</h2><span class="jk-xs">{{.HereSummary}}</span></div>
+<ul>{{range .Online}}<li data-online="{{.Online}}"><div class="jk-line"><span class="jk-dot" data-state="{{.State}}"></span><a class="jk-who" href="{{.URL}}">{{.Name}}</a><span class="jk-doing">{{if .You}}here{{else if eq .State "browsing"}}here{{else}}{{.State}}{{end}}</span><span class="jk-since" data-state="{{.State}}">{{if .You}}you{{else if eq .State "browsing"}}{{.Seen}}{{else if .Online}}{{.Since}}{{else}}{{.Seen}}{{end}}</span></div>
+{{if and .Online (or (eq .State "working") (eq .State "idle"))}}<div class="jk-bar" data-state="{{.State}}" aria-hidden="true"></div>{{end}}
+{{if and .Online (eq .State "working")}}<span class="jk-doing">on {{if .TaskURL}}<a href="{{.TaskURL}}">{{.TaskTitle}}</a>{{else}}{{.Task}}{{end}}</span>{{else if and .Online (eq .State "idle") .LastTask}}<span class="jk-doing">last: {{if .LastTaskURL}}<a href="{{.LastTaskURL}}">{{.LastTaskTitle}}</a>{{else}}{{.LastTask}}{{end}} · {{.LastOutcome}}</span>{{end}}</li>{{end}}</ul>
+{{if not .Online}}<div class="jk-here-tip"><p>No agents are running. When one starts it appears here: green while it works, amber when it waits for you.</p><code>jikko identity &lt;name&gt; start</code></div>{{else if not .Actor}}<p class="jk-xs">Log in to see what they are working on. Pages you may not read are not listed, even by name.</p>{{end}}</aside>{{end}}
+
+{{define "message"}}<section id="page" class="jk-stack jk-message">
+<div class="alert" data-variant="destructive" role="alert"><h2>{{statusTitle .Status}}</h2><p>{{.Message}}</p></div>
+{{if eq .Status 401}}<p class="jk-small jk-text-2">Log in with the form above. No token yet? On the host, run <code class="jk-inline-code">jikko auth create &lt;you&gt;</code> and paste the token it prints.</p>
+{{else if eq .Status 403}}<p class="jk-small jk-text-2">If you were sent here from a form, the page it was on may be stale: go back, reload it, and try again. If you believe you should have access, ask an administrator of the page to grant it with <code class="jk-inline-code">jikko perm</code>.</p>
+{{else if eq .Status 404}}<p class="jk-small jk-text-2">Check the address, or find the page from the workspace list. Pages you may not read look the same as pages that do not exist.</p>
+{{else if eq .Status 413}}<p class="jk-small jk-text-2">Make the request smaller, or ask the host to raise the limit (<code class="jk-inline-code">jikko serve --max-upload</code> for uploads).</p>
+{{else if eq .Status 503}}<p class="jk-small jk-text-2">The server could not read its workspace directory. The detail is in the server log on the host; the server keeps running and will serve the workspace once it is readable again.</p>{{end}}
+<nav class="jk-actions"><a class="jk-btn" href="/">Back to the workspace</a></nav>
 </section>{{end}}
 
-{{define "guide"}}<section id="page" class="jk-page jk-guide">
-<h2 class="jk-title">This workspace is empty</h2>
-<p>Jikko reads Markdown files from the workspace directory on the host; there are none yet. Three steps make it usable:</p>
-<ol>
-<li><strong>Create an identity page for yourself</strong> on the host, so Jikko knows who you are. A file <code>alice.md</code> holding
-<pre class="jk-code"><code>---
-type: identity
----
-# Alice</code></pre>
-is enough. Groups are identities with a <code>members</code> list.</li>
-<li><strong>Create a token</strong> with <code>jikko auth create alice</code> on the host and paste it into the login form above. Tokens are stored hashed in <code>.auth.md</code>, which stays out of Git.</li>
-<li><strong>Write pages.</strong> Once logged in, <em>New page</em> creates documents, tasks and identities here; on the host, <code>jikko create</code> does the same, and any Markdown file dropped into the directory is a page too. Pages without a <code>permissions</code> mapping are open to everyone; <code>jikko perm</code> restricts them.</li>
-</ol>
-<p class="jk-muted">The list refreshes on its own as files appear.</p>
-<section id="pages" hx-sse:connect="/events" hx-swap="outerHTML"></section>
-</section>{{end}}
+{{define "flash"}}{{if .Flash}}<div class="jk-flash" role="status"><p>{{.Flash}}</p></div>{{end}}{{if .Error}}<div class="alert" data-variant="destructive" role="alert"><p>{{.Error}}</p></div>{{end}}{{end}}
 
-{{define "flash"}}{{if .Flash}}<div class="alert jk-flash" role="status"><section><p>{{.Flash}}</p></section></div>{{end}}{{if .Error}}<div class="alert jk-flash" data-variant="destructive" role="alert"><section><p>{{.Error}}</p></section></div>{{end}}{{end}}
+{{define "activity"}}<aside id="jk-activity" class="jk-activity" aria-label="Activity" hx-sse:connect="{{activityURL .Ref}}" hx-swap="outerHTML">
+<section class="jk-act"><div class="jk-between"><h3 class="jk-h2">Queue</h3><span class="jk-xs">{{len .Queue}} todo</span></div>{{if .Queue}}<ul>{{range .Queue}}<li><span class="jk-status" data-status="todo">todo</span><a href="{{pageURL .Path}}">{{.Title}}</a>{{with metaString . "due"}}<span class="jk-muted">due {{.}}</span>{{end}}</li>{{end}}</ul>{{else}}<p class="jk-empty">Nothing assigned and todo.</p>{{end}}</section>
+<section class="jk-act"><div class="jk-between"><h3 class="jk-h2">Recent comments</h3></div>{{if .Comments}}<ul>{{range .Comments}}<li class="jk-col"><span><a href="{{.URL}}" class="jk-strong">{{.Title}}</a><span class="jk-path">{{.ID}}</span></span><span class="jk-text-2">{{.Text}}</span></li>{{end}}</ul>{{else}}<p class="jk-empty">None yet.</p>{{end}}</section>
+<section class="jk-act"><div class="jk-between"><h3 class="jk-h2">Commits</h3></div>{{if .Commits}}<ul>{{range .Commits}}<li><code>{{.Short}}</code><span>{{.Subject}}</span><span class="jk-xs">{{.Ago}}</span></li>{{end}}</ul>{{else}}<p class="jk-empty">None yet.</p>{{end}}</section>
+</aside>{{end}}
+
+{{define "now"}}{{with .}}<section class="jk-now" aria-labelledby="now-h"><div class="jk-line"><span class="jk-dot" data-state="{{.State}}" data-size="lg"></span><h2 id="now-h">{{if .Online}}{{if eq .State "working"}}Working <span>for {{.Since}}</span>{{else}}Idle <span>for {{.Since}}</span>{{end}}{{else}}Offline <span>· last seen {{.Seen}}</span>{{end}}</h2>{{if and .Online (eq .State "working")}}<span class="jk-on">on {{if .TaskURL}}<a href="{{.TaskURL}}" class="jk-strong">{{.TaskTitle}}</a>{{else}}{{.Task}}{{end}}{{if .Workdir}} in <code class="jk-path">{{.Workdir}}</code>{{end}}</span>{{else if .LastTask}}<span class="jk-on">last: {{if .LastTaskURL}}<a href="{{.LastTaskURL}}" class="jk-strong">{{.LastTaskTitle}}</a>{{else}}{{.LastTask}}{{end}} · {{.LastOutcome}} · {{.LastFinished}}</span>{{end}}</div>{{if and .Online (or (eq .State "working") (eq .State "idle"))}}<div class="jk-bar" data-state="{{.State}}" aria-hidden="true"></div>{{end}}</section>{{end}}{{end}}
 
 {{define "detail"}}{{with .Detail}}<section id="page" class="jk-page" data-path="{{.Path}}" data-rev="{{.Rev}}">
 {{template "flash" $}}{{if $.Report}}{{template "changes" $.Report}}{{end}}
 <div id="jk-live" hx-sse:connect="{{liveURL .Path .Rev "view"}}" hx-swap="outerHTML"></div>
-<header class="jk-page-head">
-<div><p class="jk-muted">{{.Kind}} · {{.Path}}</p><h2 class="jk-title">{{.Title}}</h2></div>
-{{if .CanWrite}}<nav class="jk-actions"><a class="btn" href="{{editURL .Path}}">Edit</a> <a class="btn" data-variant="outline" href="{{editURL .Path}}?mode=source">Edit source</a></nav>{{end}}
-</header>
-{{if .Fields}}<dl class="jk-fields">{{range .Fields}}<div><dt>{{.Key}}</dt><dd>{{if .Editable}}{{.Value}}{{else}}<pre>{{.Value}}</pre>{{end}}</dd></div>{{end}}</dl>{{end}}
-{{range .Notices}}<p class="jk-notice" data-kind="{{.Kind}}">{{.Message}}</p>{{end}}
-{{if .View}}<div class="jk-view">{{template "viewresult" .View}}</div>{{else}}<div class="jk-columns">
-<article class="jk-body">{{.HTML}}</article>
-<aside class="jk-comments" aria-label="Discussion">
-<h3>Discussion</h3>
-{{range .Comments}}<article class="card jk-thread" id="comment-{{.ID}}">
-<header><h4><a href="#anchor-{{.ID}}">{{.ID}}</a> <span class="jk-muted">on “{{.Anchor}}”</span></h4></header>
-<section>{{range .Entries}}<p class="jk-entry"><strong>@{{.Author}}</strong> {{.HTML}}</p>{{end}}</section>
-{{if $.Detail.CanComment}}<footer class="jk-stack">
-<form method="post" action="{{commentURL $.Detail.Path}}" hx-post="{{commentURL $.Detail.Path}}" hx-target="#page" hx-swap="outerHTML" class="jk-stack"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="op" value="reply"><input type="hidden" name="id" value="{{.ID}}"><textarea class="textarea" name="text" rows="2" placeholder="Reply" aria-label="Reply to {{.ID}}" required></textarea><button class="btn" data-size="sm">Reply</button></form>
-<form method="post" action="{{commentURL $.Detail.Path}}" hx-post="{{commentURL $.Detail.Path}}" hx-target="#page" hx-swap="outerHTML" hx-confirm="Resolve {{.ID}}? Its thread leaves the page; Git history keeps it."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="op" value="resolve"><input type="hidden" name="id" value="{{.ID}}"><button class="btn" data-size="sm" data-variant="outline">Resolve</button></form>
-</footer>{{end}}
-</article>{{else}}<p class="jk-muted">No open discussion.</p>{{end}}
-{{if .CanComment}}<form method="post" action="{{commentURL .Path}}" hx-post="{{commentURL .Path}}" hx-target="#page" hx-swap="outerHTML" class="jk-stack jk-new-comment">
-<h4>New comment</h4>
-<input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="op" value="add">
-<label class="label" for="jk-anchor">Text to discuss</label>
-<input class="input" id="jk-anchor" name="anchor" placeholder="Select text in the page, or paste an excerpt" required>
-<label class="label" for="jk-comment-text">Comment</label>
-<textarea class="textarea" id="jk-comment-text" name="text" rows="3" required></textarea>
-<button class="btn">Comment</button>
-</form>{{else if not $.Actor}}<p class="jk-muted">Log in to take part.</p>{{end}}
-</aside>
+<header class="jk-pagehead">
+<p class="jk-crumb"><a href="{{.SectionURL}}">{{.Section}}</a><span class="jk-sep">/</span><span class="jk-kind" data-kind="{{.Kind}}">{{if eq .Kind "document"}}doc{{else}}{{.Kind}}{{end}}</span><span class="jk-path">{{.Path}}</span></p>
+<div class="jk-titlebar">{{if eq .Kind "identity"}}<div class="jk-ident"><span class="jk-avatar" data-who="{{if .IsAgent}}agent{{else}}human{{end}}" data-size="lg">{{.Initials}}</span><div><h1>{{.Title}}{{if .IsAgent}} <span class="jk-tag">agent</span>{{end}}</h1><p>{{if .Groups}}member of {{range $i, $g := .Groups}}{{if $i}}, {{end}}<a href="{{pageURL $g.Path}}">{{$g.Title}}</a>{{end}}{{if .Activity.Now}} · {{end}}{{end}}{{if .Activity.Now}}{{if .Activity.Now.Online}}running now{{else}}not running{{end}}{{end}}</p></div></div>{{else}}<h1>{{.Title}}</h1>{{end}}
+{{if .CanWrite}}<nav class="jk-actions" aria-label="Page actions"><a class="jk-btn" href="{{editURL .Path}}">Edit</a><a class="jk-btn" href="{{editURL .Path}}?mode=source">Edit source</a></nav>{{end}}</div>
+{{if eq .Kind "task"}}<div class="jk-props">
+<div><span class="jk-h2">Status</span>{{if .CanWrite}}<form method="post" action="{{statusURL .Path}}" hx-post="{{statusURL .Path}}" hx-target="#page" hx-swap="outerHTML"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><div class="jk-seg" role="group" aria-label="Status">{{range statuses}}<button type="submit" name="status" value="{{.}}" data-status="{{.}}" aria-pressed="{{if eq . $.Detail.Status}}true{{else}}false{{end}}">{{.}}</button>{{end}}</div></form>{{else}}<span class="jk-status" data-status="{{.Status}}">{{if .Status}}{{.Status}}{{else}}none{{end}}</span>{{end}}</div>
+<div><span class="jk-h2">Assignee</span>{{range .Assignees}}<a class="jk-chip" href="{{.URL}}"><span class="jk-avatar" data-who="{{if eq .Kind "person"}}human{{else}}{{.Kind}}{{end}}">{{.Initials}}</span>{{.Name}}{{if .Online}}<span class="jk-dot" data-state="{{.State}}" data-size="sm"></span><span class="jk-doing">{{if eq .State "working"}}working{{if .Task}} on this{{end}} · {{.Since}}{{else if eq .State "idle"}}idle · {{.Since}}{{else}}here{{end}}</span>{{end}}</a>{{else}}<span class="jk-small jk-muted">unassigned</span>{{end}}</div>
+{{if .Due}}<div><span class="jk-h2">Due</span><span class="jk-small">{{.Due}}</span></div>{{end}}
 </div>{{end}}
-{{if and .CanWrite (not .View)}}<form method="post" action="{{uploadURL .Path}}" hx-post="{{uploadURL .Path}}" hx-target="#page" hx-swap="outerHTML" enctype="multipart/form-data" class="jk-row jk-upload"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><label class="label" for="jk-file">Attach a file</label><input class="input" id="jk-file" type="file" name="file" required><button class="btn" data-variant="outline">Upload and embed</button></form>{{end}}
-{{if .Backlinks}}<footer class="jk-backlinks"><h3>Linked from</h3><ul>{{range .Backlinks}}<li><a href="{{pageURL .Path}}">{{.Title}}</a></li>{{end}}</ul></footer>{{end}}
-{{if .CanWrite}}<details class="jk-manage"><summary>Rename or delete</summary>
+{{if and .Fields (ne .Kind "task")}}<dl class="jk-fields">{{range .Fields}}{{if ne .Key "type"}}<div><dt>{{.Key}}</dt><dd>{{if .Editable}}{{.Value}}{{else}}<pre>{{.Value}}</pre>{{end}}</dd></div>{{end}}{{end}}</dl>{{end}}
+</header>
+{{range .Notices}}<p class="jk-notice" data-kind="{{.Kind}}">{{.Message}}</p>{{end}}
+{{if and (eq .Kind "identity") .Activity.Now}}{{template "now" .Activity.Now}}{{end}}
+{{if .View}}<div class="jk-view">{{template "viewresult" .View}}</div>{{else}}<div class="jk-cols">
+<article class="jk-body">{{.HTML}}
+{{if .History}}<section class="jk-section"><h2 class="jk-h2">History</h2><ul class="jk-hist">{{range .History}}<li data-who="{{.WhoKind}}"><b>{{.Who}}</b> {{.Subject}} · {{.Ago}} <code>{{.Short}}</code></li>{{end}}</ul></section>{{end}}
+{{if .Backlinks}}<footer class="jk-backlinks"><span>Linked from</span>{{range $i, $b := .Backlinks}}{{if $i}}<span>·</span>{{end}}<a href="{{pageURL $b.Path}}">{{$b.Title}}</a>{{end}}</footer>{{end}}
+</article>
+{{if eq .Kind "identity"}}{{template "activity" .Activity}}{{else}}<aside aria-label="Discussion">
+<div class="jk-between"><h2 class="jk-h2">Discussion</h2><span class="jk-xs">{{len .Comments}} open</span></div>
+{{range .Comments}}<article class="jk-thread" id="comment-{{.ID}}"{{if .Needs}} data-needs="you"{{end}}>
+<header><a class="jk-anchor-ref" href="#anchor-{{.ID}}" aria-label="Go to anchor {{.ID}}">{{.ID}}</a><q>{{.Anchor}}</q></header>
+{{range .Entries}}<div class="jk-entry"><span class="jk-avatar" data-who="{{.Kind}}" aria-hidden="true">{{.Initials}}</span><p class="jk-byline" data-who="{{.Kind}}"><b>{{.Name}}</b>{{if eq .Kind "agent"}}<span class="jk-tag">agent</span>{{end}}</p><div class="jk-text"><strong>@{{.Author}}</strong> {{.HTML}}</div></div>{{end}}
+{{if $.Detail.CanComment}}<form class="jk-reply" method="post" action="{{commentURL $.Detail.Path}}" hx-post="{{commentURL $.Detail.Path}}" hx-target="#page" hx-swap="outerHTML"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="op" value="reply"><input type="hidden" name="id" value="{{.ID}}"><label class="jk-sr" for="reply-{{.ID}}">Reply to thread {{.ID}}</label><textarea id="reply-{{.ID}}" name="text" rows="1" placeholder="Reply…" required></textarea><button class="jk-btn" data-variant="primary" data-size="sm">Reply</button></form>
+<div class="jk-thread-foot"><form method="post" action="{{commentURL $.Detail.Path}}" hx-post="{{commentURL $.Detail.Path}}" hx-target="#page" hx-swap="outerHTML" hx-confirm="Resolve {{.ID}}? Its thread leaves the page; Git history keeps it."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="op" value="resolve"><input type="hidden" name="id" value="{{.ID}}"><button class="jk-btn" data-variant="ghost" data-size="sm">✓ Resolve</button></form>{{if .Needs}}<span class="jk-mentions-you">mentions you</span>{{end}}</div>{{end}}
+</article>{{else}}<p class="jk-empty">No open discussion.</p>{{end}}
+{{if .CanComment}}<form class="jk-new-comment" method="post" action="{{commentURL .Path}}" hx-post="{{commentURL .Path}}" hx-target="#page" hx-swap="outerHTML"><h3 class="jk-h2">New comment</h3><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="op" value="add"><label class="label" for="jk-anchor">On the text</label><input class="jk-input" id="jk-anchor" name="anchor" placeholder="Select a passage in the page, or paste it" required><label class="label" for="jk-comment-text">Comment</label><textarea class="jk-input" id="jk-comment-text" name="text" rows="3" required></textarea><button class="jk-btn" data-variant="primary">Comment</button></form>{{else if not $.Actor}}<p class="jk-empty">Log in to take part.</p>{{end}}
+</aside>{{end}}
+</div>{{end}}
+{{if and .CanWrite (not .View)}}<form method="post" action="{{uploadURL .Path}}" hx-post="{{uploadURL .Path}}" hx-target="#page" hx-swap="outerHTML" enctype="multipart/form-data" class="jk-row jk-upload"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><label class="label" for="jk-file">Attach a file</label><input class="input" id="jk-file" type="file" name="file" required><button class="jk-btn">Upload and embed</button></form>{{end}}
+{{if .CanWrite}}<details class="jk-manage"><summary class="jk-h2">Rename or delete</summary>
 <form method="post" action="{{renameURL .Path}}" hx-post="{{renameURL .Path}}" hx-target="#page" hx-swap="outerHTML" class="jk-rename jk-stack" hx-confirm="Rename {{.Path}}? References to it are rewritten so they keep resolving.">
 <input type="hidden" name="_csrf" value="{{$.CSRF}}">
 <label class="label" for="jk-rename-to">New path</label>
-<div class="jk-row"><input class="input" id="jk-rename-to" name="to" value="{{stem .Path}}" required> <button class="btn" data-variant="outline">Rename</button></div>
-<label class="jk-remove"><input type="checkbox" name="no_rewrite" value="1"> Move the file only and report the references that break</label>
+<div class="jk-row"><input class="jk-input" id="jk-rename-to" name="to" value="{{stem .Path}}" required> <button class="jk-btn">Rename</button></div>
+<label class="jk-small jk-text-2"><input type="checkbox" name="no_rewrite" value="1"> Move the file only and report the references that break</label>
 </form>
 <form method="post" action="{{deleteURL .Path}}" hx-post="{{deleteURL .Path}}" hx-target="#page" hx-swap="outerHTML" class="jk-delete jk-stack" hx-confirm="Delete {{.Path}}? Links to it will no longer resolve. Git history keeps the file.">
 <input type="hidden" name="_csrf" value="{{$.CSRF}}">
-{{if eq .Kind "identity"}}<label class="jk-remove"><input type="checkbox" name="prune" value="1"> Also remove this identity from group members and access policies</label>{{end}}
-<div class="jk-row"><button class="btn" data-variant="destructive">Delete</button> <span class="jk-muted">Refused while the page has unresolved comments.</span></div>
+{{if eq .Kind "identity"}}<label class="jk-small jk-text-2"><input type="checkbox" name="prune" value="1"> Also remove this identity from group members and access policies</label>{{end}}
+<div class="jk-row"><button class="jk-btn" data-variant="danger">Delete</button> <span class="jk-xs">Refused while the page has unresolved comments.</span></div>
 </form>
 </details>{{end}}
 </section>{{end}}{{end}}
 
 {{define "viewresult"}}{{if .Groups}}<div class="jk-board" data-layout="{{.Spec.Layout}}">{{range .Groups}}<section class="jk-column"><h3>{{if .Key}}{{.Key}}{{else}}(none){{end}} <span class="badge" data-variant="outline">{{len .Pages}}</span></h3><ul>{{range .Pages}}<li><a href="{{pageURL .Path}}">{{.Title}}</a></li>{{end}}</ul></section>{{end}}</div>
-{{else if eq .Spec.Layout "table"}}<table class="table"><thead><tr><th>Title</th><th>Type</th><th>Status</th><th>Assignee</th><th>Due</th></tr></thead><tbody>{{range .Pages}}<tr><td><a href="{{pageURL .Path}}">{{.Title}}</a></td><td>{{.Type}}</td><td>{{prop . "status"}}</td><td>{{prop . "assignee"}}</td><td>{{prop . "due"}}</td></tr>{{else}}<tr><td colspan="5">No pages.</td></tr>{{end}}</tbody></table>
+{{else if eq .Spec.Layout "table"}}<table class="table"><thead><tr><th>Title</th><th>Type</th><th>Status</th><th>Assignee</th><th>Due</th></tr></thead><tbody>{{range .Pages}}<tr><td><a href="{{pageURL .Path}}">{{.Title}}</a></td><td>{{.Type}}</td><td>{{with prop . "status"}}<span class="jk-status" data-status="{{lower .}}">{{.}}</span>{{end}}</td><td>{{prop . "assignee"}}</td><td>{{prop . "due"}}</td></tr>{{else}}<tr><td colspan="5">No pages.</td></tr>{{end}}</tbody></table>
 {{else}}<ul class="jk-view-list">{{range .Pages}}<li><a href="{{pageURL .Path}}">{{.Title}}</a> <span class="jk-muted">{{.Type}}</span></li>{{else}}<li class="jk-muted">No pages.</li>{{end}}</ul>{{end}}{{end}}
 
-{{define "edit"}}{{with .Edit}}<section id="page" class="jk-page" data-path="{{.Path}}">
-<header class="jk-page-head">
-<div><p class="jk-muted">Editing · {{.Path}}</p><h2 class="jk-title">{{.Title}}</h2></div>
-<nav class="jk-actions"><a class="btn" data-variant="{{if eq .Mode "source"}}outline{{else}}primary{{end}}" href="{{editURL .Path}}">Fields &amp; body</a> <a class="btn" data-variant="{{if eq .Mode "source"}}primary{{else}}outline{{end}}" href="{{editURL .Path}}?mode=source">Source</a> <a class="btn" data-variant="ghost" href="{{pageURL .Path}}">Cancel</a></nav>
-</header>
-{{if .Error}}<div class="alert" data-variant="destructive" role="alert"><section><p>{{.Error}}</p></section></div>{{end}}
+{{define "edit"}}{{with .Edit}}<section id="page" class="jk-page jk-page-edit" data-path="{{.Path}}">
+<header class="jk-pagehead"><p class="jk-crumb"><span class="jk-muted jk-small">Editing</span><span class="jk-sep">/</span><span class="jk-path">{{.Path}}</span></p>
+<div class="jk-titlebar"><h1>{{.Title}}</h1><nav class="jk-actions"><a class="jk-btn" data-variant="{{if eq .Mode "source"}}outline{{else}}primary{{end}}" href="{{editURL .Path}}">Fields &amp; body</a><a class="jk-btn" data-variant="{{if eq .Mode "source"}}primary{{else}}outline{{end}}" href="{{editURL .Path}}?mode=source">Source</a><a class="jk-btn" data-variant="ghost" href="{{pageURL .Path}}">Cancel</a></nav></div></header>
+{{if .Error}}<div class="alert" data-variant="destructive" role="alert"><p>{{.Error}}</p></div>{{end}}
 {{if not .Conflict}}<div id="jk-live" hx-sse:connect="{{liveURL .Path .Rev "edit"}}" hx-swap="outerHTML"></div>{{end}}
 {{if .Conflict}}{{template "conflict" $}}{{end}}
-<form method="post" action="{{saveURL .Path}}" hx-post="{{saveURL .Path}}" hx-target="#page" hx-swap="outerHTML" class="jk-stack jk-edit">
+<form method="post" action="{{saveURL .Path}}" hx-post="{{saveURL .Path}}" hx-target="#page" hx-swap="outerHTML" class="jk-edit">
 <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="mode" value="{{.Mode}}"><input type="hidden" name="rev" value="{{.Rev}}"><input type="hidden" name="base" value="{{.Base}}">
 {{if eq .Mode "source"}}<label class="label" for="jk-source">Source</label>
 <textarea class="textarea jk-editor" id="jk-source" name="source" rows="24" spellcheck="false">
 {{.Source}}</textarea>
 {{else}}<fieldset class="jk-fieldset"><legend>Properties</legend>
-{{range .Fields}}<div class="jk-field-row"><label class="label" for="f-{{.Key}}">{{.Key}}</label>{{if .Editable}}<input class="input" id="f-{{.Key}}" name="f:{{.Key}}" value="{{.Value}}">{{else}}<pre class="jk-readonly" id="f-{{.Key}}">{{.Value}}</pre>{{end}}{{if ne .Key "permissions"}}<label class="jk-remove"><input type="checkbox" name="rm:{{.Key}}" value="1"> remove</label>{{else}}<span class="jk-muted">edit in source</span>{{end}}</div>
+{{range .Fields}}<div class="jk-field-row"><label class="label" for="f-{{.Key}}">{{.Key}}</label>{{if .Editable}}<input class="input" id="f-{{.Key}}" name="f:{{.Key}}" value="{{.Value}}">{{else}}<pre class="jk-readonly" id="f-{{.Key}}">{{.Value}}</pre>{{end}}{{if ne .Key "permissions"}}<label class="jk-remove"><input type="checkbox" name="rm:{{.Key}}" value="1"> remove</label>{{else}}<span class="jk-xs">edit in source</span>{{end}}</div>
 {{end}}<div class="jk-field-row"><input class="input" name="new_key" placeholder="New property" aria-label="New property name"><input class="input" name="new_value" placeholder="Value" aria-label="New property value"></div>
 </fieldset>
 {{if not .IsView}}<label class="label" for="jk-body">Body</label>
 <textarea class="textarea jk-editor" id="jk-body" name="body" rows="20" spellcheck="false">
 {{.Body}}</textarea>{{end}}{{end}}
-<div class="jk-row"><button class="btn">Save</button> <span class="jk-muted">Saved against revision {{short .Rev}}; a concurrent change is merged or shown as a conflict.</span></div>
+<div class="jk-row"><button class="jk-btn" data-variant="primary">Save</button> <span class="jk-xs">Saved against revision {{short .Rev}}; a concurrent change is merged or shown as a conflict.</span></div>
 </form>
 </section>{{end}}{{end}}
 
-{{define "conflict"}}{{with .Edit}}{{with .Conflict}}<form method="post" action="{{saveURL $.Edit.Path}}" hx-post="{{saveURL $.Edit.Path}}" hx-target="#page" hx-swap="outerHTML" class="card jk-conflict">
+{{define "conflict"}}{{with .Edit}}{{with .Conflict}}<form method="post" action="{{saveURL $.Edit.Path}}" hx-post="{{saveURL $.Edit.Path}}" hx-target="#page" hx-swap="outerHTML" class="jk-conflict">
 <header><h3>This page changed while you were editing</h3>
-<p>{{if .BaseKnown}}Your edit and the current page change the same places. Choose a side for each one, or change your edit below and save again.{{else}}The revision you edited could not be found, so Jikko cannot tell which changes are yours. Choose a side for each difference.{{end}}</p></header>
+<p class="jk-small">{{if .BaseKnown}}Your edit and the current page change the same places. Choose a side for each one, or change your edit below and save again.{{else}}The revision you edited could not be found, so Jikko cannot tell which changes are yours. Choose a side for each difference.{{end}}</p></header>
 <section class="jk-stack">
 <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="mode" value="resolve"><input type="hidden" name="rev" value="{{$.Edit.Rev}}"><input type="hidden" name="base" value="{{$.Edit.Base}}"><input type="hidden" name="yours" value="{{.Yours}}"><input type="hidden" name="against" value="{{.Against}}">
 {{range .Fields}}<fieldset class="jk-choice"><legend>Property <code>{{.Key}}</code></legend>
@@ -147,41 +168,33 @@ is enough. Groups are identities with a <code>members</code> list.</li>
 <label><input type="radio" name="resolve:{{.ID}}" value="current" required> Keep current</label> <label><input type="radio" name="resolve:{{.ID}}" value="yours"> Use yours</label>
 </fieldset>{{end}}
 </section>
-<footer><button class="btn">Save with these choices</button> <a class="btn" data-variant="outline" href="{{pageURL $.Edit.Path}}">Discard my edit</a></footer>
+<footer class="jk-row"><button class="jk-btn" data-variant="primary">Save with these choices</button> <a class="jk-btn" href="{{pageURL $.Edit.Path}}">Discard my edit</a></footer>
 </form>{{end}}{{end}}{{end}}
 
 
-{{define "changes"}}<div class="card jk-changes"><header><h3>{{.Title}}</h3></header><section>{{range .Lists}}<h4>{{.Label}}</h4><ul>{{range .Changes}}<li><a href="{{pageURL .Path}}">{{.Path}}</a> <span class="jk-muted">({{.Field}})</span> <code>{{.From}}</code>{{if .To}} → <code>{{.To}}</code>{{end}}</li>{{end}}</ul>{{else}}<p class="jk-muted">No reference was affected.</p>{{end}}{{if .Hidden}}<p class="jk-muted">{{.Hidden}} affected reference(s) are in pages you cannot read.</p>{{end}}</section></div>{{end}}
+{{define "changes"}}<section class="jk-changes"><h3>{{.Title}}</h3>{{range .Lists}}<h4 class="jk-h2">{{.Label}}</h4><ul>{{range .Changes}}<li><a href="{{pageURL .Path}}">{{.Path}}</a> <span class="jk-path">{{.Field}}</span> <code class="jk-inline-code">{{.From}}</code>{{if .To}} → <code class="jk-inline-code">{{.To}}</code>{{end}}</li>{{end}}</ul>{{else}}<p class="jk-empty">No reference was affected.</p>{{end}}{{if .Hidden}}<p class="jk-xs">{{.Hidden}} affected reference(s) are in pages you cannot read.</p>{{end}}</section>{{end}}
 
-{{define "report"}}<section id="page" class="jk-page">{{template "flash" .}}{{template "changes" .Report}}<nav class="jk-actions"><a class="btn" data-variant="outline" href="/">Back to the workspace</a></nav></section>{{end}}
+{{define "report"}}<section id="page" class="jk-stack">{{template "flash" .}}{{template "changes" .Report}}<nav class="jk-actions"><a class="jk-btn" href="/">Back to the workspace</a></nav></section>{{end}}
 
-{{define "new"}}{{with .New}}<section id="page" class="jk-page">
-<header class="jk-page-head"><div><p class="jk-muted">New page</p><h2 class="jk-title">Create a {{.Type}}</h2></div>
-<nav class="jk-actions"><a class="btn" data-variant="{{if eq .Type "document"}}primary{{else}}outline{{end}}" href="/new">Document</a> <a class="btn" data-variant="{{if eq .Type "task"}}primary{{else}}outline{{end}}" href="/new?type=task">Task</a> <a class="btn" data-variant="{{if eq .Type "identity"}}primary{{else}}outline{{end}}" href="/new?type=identity">Identity</a></nav></header>
-{{if .Error}}<div class="alert" data-variant="destructive" role="alert"><section><p>{{.Error}}</p></section></div>{{end}}
+{{define "new"}}{{with .New}}<section id="page" class="jk-page jk-new">
+<header class="jk-pagehead"><p class="jk-crumb"><span class="jk-muted jk-small">New page</span><span class="jk-sep">/</span><span class="jk-kind" data-kind="{{.Type}}">{{if eq .Type "document"}}doc{{else}}{{.Type}}{{end}}</span></p>
+<div class="jk-titlebar"><h1>Create a {{.Type}}</h1><nav class="jk-filters" aria-label="Page type"><a href="/new" aria-current="{{if eq .Type "document"}}true{{else}}false{{end}}">Document</a><a href="/new?type=task" aria-current="{{if eq .Type "task"}}true{{else}}false{{end}}">Task</a><a href="/new?type=identity" aria-current="{{if eq .Type "identity"}}true{{else}}false{{end}}">Identity</a></nav></div></header>
+{{if .Error}}<div class="alert" data-variant="destructive" role="alert"><p>{{.Error}}</p></div>{{end}}
 <form method="post" action="/create" class="jk-stack jk-create">
 <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="type" value="{{.Type}}">
 <label class="label" for="jk-new-path">Path</label>
-<input class="input" id="jk-new-path" name="path" value="{{.Path}}" placeholder="{{if eq .Type "task"}}tasks/ship-v1{{else if eq .Type "identity"}}people/alice{{else}}notes/meeting{{end}}" required>
-<p class="jk-help">Folders are created as needed; <code>.md</code> is added. {{if eq .Type "task"}}The task starts with <code>status: todo</code>; set its assignee and other properties after creating it.{{else if eq .Type "identity"}}An identity with a <code>members</code> property is a group; give it one in the properties afterwards.{{else}}The page is open to everyone until a <code>permissions</code> mapping restricts it.{{end}}</p>
+<input class="jk-input" id="jk-new-path" name="path" value="{{.Path}}" placeholder="{{if eq .Type "task"}}tasks/ship-v1{{else if eq .Type "identity"}}people/alice{{else}}notes/meeting{{end}}" required>
+<p class="jk-xs">Folders are created as needed; <code>.md</code> is added. {{if eq .Type "task"}}The task starts with <code>status: todo</code>; set its assignee and other properties after creating it.{{else if eq .Type "identity"}}An identity with a <code>members</code> property is a group; give it one in the properties afterwards.{{else}}The page is open to everyone until a <code>permissions</code> mapping restricts it.{{end}}</p>
 <label class="label" for="jk-new-body">Body</label>
 <textarea class="textarea jk-editor" id="jk-new-body" name="body" rows="16" spellcheck="false" placeholder="# Title&#10;&#10;Markdown, [[references]], ![[embeds]] and @mentions.">{{.Body}}</textarea>
-<div class="jk-row"><button class="btn" type="submit">Create</button> <a class="btn" data-variant="ghost" href="/">Cancel</a></div>
+<div class="jk-row"><button class="jk-btn" data-variant="primary" type="submit">Create</button> <a class="jk-btn" data-variant="ghost" href="/">Cancel</a></div>
 </form>
 </section>{{end}}{{end}}
 
-{{define "foryou"}}{{with .ForYou}}<section id="page" class="jk-page jk-foryou">
-<header class="jk-page-head"><div><p class="jk-muted">{{$.Actor}}</p><h2 class="jk-title">For you</h2></div></header>
-<div class="jk-columns">
-<section><h3>Tasks assigned to you</h3>{{if .Assigned}}<div class="item-group">{{range .Assigned}}<article class="item" data-variant="outline"><section><h4><a href="{{pageURL .Path}}">{{.Title}}</a>{{if .Comments}} <span class="badge jk-comment-count" data-variant="outline">{{len .Comments}} open</span>{{end}}</h4><p class="text-muted-foreground">{{prop2 .Metadata "status"}} · {{.Path}}</p></section></article>{{end}}</div>{{else}}<p class="jk-muted">No task names you, or a group you belong to, as assignee.</p>{{end}}</section>
-<section><h3>Pages that mention you</h3>{{if .Mentions}}<div class="item-group">{{range .Mentions}}<article class="item" data-variant="outline"><section><h4><a href="{{pageURL .Path}}">{{.Title}}</a></h4><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{end}}</div>{{else}}<p class="jk-muted">No page mentions you or a group you belong to.</p>{{end}}</section>
-</div>
-</section>{{end}}{{end}}
-
 {{define "problems"}}{{with .Problems}}<section id="page" class="jk-page jk-problems">
-<header class="jk-page-head"><div><p class="jk-muted">What <code>jikko check</code> reports</p><h2 class="jk-title">Problems</h2></div></header>
-{{if .Groups}}<p>{{.Count}} problem(s) in the pages you may read. Problems are reported, never fatal; a page whose access policy cannot be read is denied to everyone until it is fixed.</p>
-{{range .Groups}}<article class="card jk-problem-group"><header><h3><a href="{{pageURL .Path}}">{{.Title}}</a> <span class="jk-muted">{{.Path}}</span></h3></header><section><ul>{{range .Problems}}<li class="jk-notice" data-kind="problem"><span class="badge" data-variant="outline">{{.Kind}}</span> {{.Message}}</li>{{end}}{{range .Warnings}}<li class="jk-notice" data-kind="warning"><span class="badge" data-variant="outline">{{.Kind}}</span> {{.Message}}</li>{{end}}</ul></section></article>{{end}}
-{{else}}<p>No problems in the pages you may read.</p>{{end}}
-{{if .Hidden}}<p class="jk-muted">{{.Hidden}} report(s) concern pages you may not read.</p>{{end}}
+<header class="jk-pagehead"><p class="jk-crumb"><span class="jk-muted jk-small">What <code class="jk-inline-code">jikko check</code> reports</span></p><div class="jk-titlebar"><h1>Problems</h1></div></header>
+{{if .Groups}}<p class="jk-small jk-text-2">{{.Count}} problem(s) in the pages you may read. Problems are reported, never fatal; a page whose access policy cannot be read is denied to everyone until it is fixed.</p>
+<ul class="jk-list">{{range .Groups}}<li class="jk-card jk-problem-group"><div><h3><a href="{{pageURL .Path}}">{{.Title}}</a> <span class="jk-path">{{.Path}}</span></h3><ul>{{range .Problems}}<li class="jk-notice" data-kind="problem"><span class="jk-kind">{{.Kind}}</span> {{.Message}}</li>{{end}}{{range .Warnings}}<li class="jk-notice" data-kind="warning"><span class="jk-kind">{{.Kind}}</span> {{.Message}}</li>{{end}}</ul></div></li>{{end}}</ul>
+{{else}}<p class="jk-quiet">No problems in the pages you may read.</p>{{end}}
+{{if .Hidden}}<p class="jk-xs">{{.Hidden}} report(s) concern pages you may not read.</p>{{end}}
 </section>{{end}}{{end}}

@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"flag"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -45,6 +45,9 @@ type cache struct {
 	ws    *jikko.Workspace
 	err   error
 	ready bool
+
+	// autoCommit records every mutation as an attributed Git commit.
+	autoCommit bool
 }
 
 func (c *cache) load() (*jikko.Workspace, error) {
@@ -58,8 +61,11 @@ func (c *cache) load() (*jikko.Workspace, error) {
 		return c.ws, c.err
 	}
 	ws, err := jikko.Open(c.dir)
-	if err == nil && len(ws.Problems) > 0 {
-		log.Printf("%d workspace problem(s); run `jikko check` for detail", len(ws.Problems))
+	if err == nil {
+		ws.AutoCommit = c.autoCommit
+		if len(ws.Problems) > 0 {
+			log.Printf("%d workspace problem(s); run `jikko check` for detail", len(ws.Problems))
+		}
 	}
 	c.stamp, c.ws, c.err, c.ready = stamp, ws, err, true
 	return ws, err
@@ -110,16 +116,8 @@ type server struct {
 // shown are set.
 type pageData struct {
 	Pages []*jikko.Page
-	// Total counts the pages of the workspace, readable or not, so an
-	// empty workspace can be told from one the caller may not read.
-	Total int
 	Query string
 	Actor string
-	// Status is the HTTP status of a message page.
-	Status int
-	// Search is the title or path filter of the page list.
-	Search  string
-	Filters []filterLink
 	// CSRF is the anti-forgery token every form posts back.
 	CSRF    string
 	Flash   string
@@ -127,37 +125,50 @@ type pageData struct {
 	Message string
 	Detail  *detailView
 	Edit    *editView
-	New     *newView
-	ForYou  *forYouView
+	// Status is the HTTP status of a message page.
+	Status int
+	New    *newView
 	// Problems is the check report page.
 	Problems *problemsView
 	// Report says what a rename or deletion did to references.
 	Report *changeReport
-}
-
-// filterLink is one of the type filters above the page list.
-type filterLink struct {
-	Label, URL string
-	Active     bool
+	// Online is who is here: running agents and people with a live session.
+	Online      []presenceView
+	HereSummary string
+	// The viewer, for the header.
+	ActorName, ActorInitials, ActorURL string
+	// Home page only.
+	Needs []needView
+	Cards []cardView
+	// Empty is a workspace with no pages at all: the first-run screen.
+	Empty bool
 }
 
 func serve(args []string) error {
 	var addr, maxUpload *string
-	var trustProxy *bool
-	args, dir, _, err := flags("serve", args, func(f *flag.FlagSet) {
+	var trustProxy, autoCommit *bool
+	args, dir, err := flagsNoToken("serve", args, func(f *flag.FlagSet) {
 		addr = f.String("addr", "127.0.0.1:8080", "listen address")
 		maxUpload = f.String("max-upload", os.Getenv("JIKKO_MAX_UPLOAD"), "maximum upload size, such as 25M (or JIKKO_MAX_UPLOAD)")
 		trustProxy = f.Bool("behind-proxy", false, "trust X-Forwarded-Proto from a reverse proxy when setting cookie Secure")
+		autoCommit = f.Bool("auto-commit", false, "record every change as a Git commit with Jikko-Actor and Jikko-Operation trailers")
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) != 0 {
-		return errors.New("usage: jikko serve [flags]")
+		return usageOf("serve")
+	}
+	if _, err := openWorkspace(*dir); err != nil {
+		return err
 	}
 	root, err := filepath.Abs(*dir)
 	if err != nil {
 		return err
+	}
+	warnWithoutGit(root)
+	if *autoCommit && !jikko.GitBacked(root) {
+		return fmt.Errorf("--auto-commit: %w", jikko.ErrNoGit)
 	}
 
 	limit, err := parseSize(*maxUpload)
@@ -166,6 +177,7 @@ func serve(args []string) error {
 	}
 	s := newServer(root, *trustProxy)
 	s.maxUpload = limit
+	s.cache.autoCommit = *autoCommit
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           s.routes(),
@@ -175,8 +187,14 @@ func serve(args []string) error {
 		// No WriteTimeout: it would sever live event streams. streamMaxAge
 		// bounds their lifetime instead.
 	}
-	log.Printf("Jikko: http://%s", *addr)
-	return srv.ListenAndServe()
+	// Bind before announcing, so a bad address fails instead of logging
+	// a URL nobody can open.
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return err
+	}
+	log.Printf("serving %s at http://%s", root, ln.Addr())
+	return srv.Serve(ln)
 }
 
 func newServer(root string, trustProxy bool) *server {
@@ -191,21 +209,6 @@ func newServer(root string, trustProxy bool) *server {
 	}
 }
 
-// searchPages keeps the pages whose title or path contains q, ignoring case.
-func searchPages(pages []*jikko.Page, q string) []*jikko.Page {
-	if q == "" {
-		return pages
-	}
-	q = strings.ToLower(q)
-	out := make([]*jikko.Page, 0, len(pages))
-	for _, p := range pages {
-		if strings.Contains(strings.ToLower(p.Title), q) || strings.Contains(strings.ToLower(p.Path), q) {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/assets/", assetHandler())
@@ -217,14 +220,15 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /create", s.createPage)
 	mux.HandleFunc("POST /rename/{path...}", s.renamePage)
 	mux.HandleFunc("POST /delete/{path...}", s.deletePage)
-	mux.HandleFunc("GET /me", s.forYou)
 	mux.HandleFunc("GET /problems", s.problems)
 	mux.HandleFunc("GET /p/{path...}", s.pageDetail)
 	mux.HandleFunc("GET /edit/{path...}", s.editPage)
 	mux.HandleFunc("POST /save/{path...}", s.savePage)
 	mux.HandleFunc("POST /comment/{path...}", s.commentPage)
+	mux.HandleFunc("POST /status/{path...}", s.setStatus)
 	mux.HandleFunc("POST /upload/{path...}", s.uploadFile)
 	mux.HandleFunc("GET /events/page/{path...}", s.pageEvents)
+	mux.HandleFunc("GET /events/activity/{path...}", s.activityEvents)
 	mux.HandleFunc("GET /files/{path...}", s.serveFile)
 	mux.HandleFunc("/", s.index)
 	return securityHeaders(mux)
@@ -332,32 +336,15 @@ func (s *server) data(r *http.Request, extend bool) (pageData, error) {
 	if v := q.Get("status"); v != "" {
 		filters.Set("status", v)
 	}
-	search := strings.TrimSpace(q.Get("q"))
-	if search != "" {
-		filters.Set("q", search)
-	}
 	query := ""
 	if encoded := filters.Encode(); encoded != "" {
 		query = "?" + encoded
 	}
 	actor := s.actor(r, ws, extend)
-	pages := searchPages(visiblePages(ws, actor, ws.List(kind, q.Get("status"))), search)
-	var links []filterLink
-	for _, f := range []struct{ label, kind string }{{"All", ""}, {"Documents", "document"}, {"Tasks", "task"}, {"Views", "view"}, {"Identities", "identity"}} {
-		v := url.Values{}
-		if f.kind != "" {
-			v.Set("type", f.kind)
-		}
-		if search != "" {
-			v.Set("q", search)
-		}
-		target := "/pages"
-		if encoded := v.Encode(); encoded != "" {
-			target += "?" + encoded
-		}
-		links = append(links, filterLink{Label: f.label, URL: target, Active: string(kind) == f.kind})
-	}
-	return pageData{Pages: pages, Total: len(ws.Pages), Query: query, Search: search, Filters: links, Actor: actor}, nil
+	pages := visiblePages(ws, actor, ws.List(kind, q.Get("status")))
+	data := pageData{Pages: pages, Cards: s.cards(ws, pages), Query: query, Actor: actor, Needs: s.needs(ws, actor), Empty: len(ws.Pages) == 0}
+	s.decorate(&data, ws)
+	return data, nil
 }
 
 // render executes a template for the caller and also reports who the caller

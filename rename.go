@@ -116,7 +116,7 @@ func (w *Workspace) Rename(actor, ref, to string, opt RenameOptions) (*RenameRes
 		plan.write[clean] = next
 		delete(plan.write, p.Path)
 	}
-	c := change{write: plan.write, remove: map[string]bool{p.Path: true}, moved: map[string]string{clean: p.Path}}
+	c := change{op: "rename", write: plan.write, remove: map[string]bool{p.Path: true}, moved: map[string]string{clean: p.Path}}
 	oldTarget := filepath.Join(cur.Root, filepath.FromSlash(p.Path))
 	mode := os.FileMode(0644)
 	if info, err := os.Stat(oldTarget); err == nil {
@@ -240,7 +240,7 @@ func (w *Workspace) Delete(actor, ref string, opt DeleteOptions) (*DeleteResult,
 			return nil, fmt.Errorf("%s is named by %s; deleting it would change who may do what. Pass --prune to remove those references", p.Path, strings.Join(where, ", "))
 		}
 	}
-	c := change{write: plan.write, remove: map[string]bool{p.Path: true}}
+	c := change{op: "delete", write: plan.write, remove: map[string]bool{p.Path: true}}
 	target := filepath.Join(cur.Root, filepath.FromSlash(p.Path))
 	err = w.stage(actor, "deletion", c, plan.unchanged, func() error {
 		if err := plan.apply(cur.Root, ""); err != nil {

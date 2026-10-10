@@ -293,7 +293,7 @@ func (w *Workspace) AddComment(actor, ref, anchor, text string) (string, error) 
 		return "", err
 	}
 	id := ""
-	err = w.commentMutation(actor, ref, func(person, body string) (string, error) {
+	err = w.commentMutation(actor, ref, "comment-add", func(person, body string) (string, error) {
 		spans, _ := scanComments(body)
 		id = nextCommentID(spans)
 		at, err := findAnchor(body, spans, anchor)
@@ -321,7 +321,7 @@ func (w *Workspace) ReplyComment(actor, ref, id, text string) error {
 	if err != nil {
 		return err
 	}
-	return w.commentMutation(actor, ref, func(person, body string) (string, error) {
+	return w.commentMutation(actor, ref, "comment-reply", func(person, body string) (string, error) {
 		s, err := commentByID(body, id)
 		if err != nil {
 			return "", err
@@ -347,7 +347,7 @@ func (w *Workspace) ReplyComment(actor, ref, id, text string) error {
 // requires the comment capability, which the permission semantics define as
 // including resolve.
 func (w *Workspace) ResolveComment(actor, ref, id string) error {
-	return w.commentMutation(actor, ref, func(_, body string) (string, error) {
+	return w.commentMutation(actor, ref, "comment-resolve", func(_, body string) (string, error) {
 		s, err := commentByID(body, id)
 		if err != nil {
 			return "", err
@@ -379,7 +379,7 @@ func (w *Workspace) ResolveComment(actor, ref, id string) error {
 // commentMutation runs a body edit under the comment capability through the
 // staged mutation path. edit receives the actor's identity reference and the
 // body with line endings normalized to "\n"; CRLF files keep CRLF.
-func (w *Workspace) commentMutation(actor, ref string, edit func(person, body string) (string, error)) error {
+func (w *Workspace) commentMutation(actor, ref, op string, edit func(person, body string) (string, error)) error {
 	defer w.lock()()
 	person, ok := w.ResolveIdentity(actor)
 	if !ok || len(person.Members) != 0 {
@@ -396,7 +396,7 @@ func (w *Workspace) commentMutation(actor, ref string, edit func(person, body st
 	if !w.Allowed(actor, p, Comment) {
 		return &PermissionError{Actor: actor, Need: Comment, Path: p.Path}
 	}
-	return w.mutateFile(actor, p, Comment, func(raw []byte) ([]byte, error) {
+	return w.mutateFile(actor, p, Comment, op, func(raw []byte) ([]byte, error) {
 		_, old, hasFront := splitFrontmatter(raw)
 		if !hasFront {
 			if opensFrontmatter(raw) {

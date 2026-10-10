@@ -145,7 +145,7 @@ func (w *Workspace) SaveSource(actor, ref, baseRev string, yours []byte, opt Sav
 			return nil, &PermissionError{Actor: actor, Need: Admin, Path: p.Path, Reason: "which changing its permissions needs"}
 		}
 	}
-	err = w.stage(actor, "edit", writes(map[string][]byte{p.Path: next}), func(current *Workspace) error {
+	err = w.stage(actor, "edit", writes("save", map[string][]byte{p.Path: next}), func(current *Workspace) error {
 		if now, ok := current.Pages[p.Path]; !ok || now.Rev != currentRev {
 			return fmt.Errorf("%s changed on disk after it was read; retry", p.Path)
 		} else if !current.Allowed(actor, now, need) {

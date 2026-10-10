@@ -92,6 +92,7 @@ type sessionEntry struct {
 	identity   string
 	credential string
 	expires    time.Time
+	seen       time.Time
 }
 
 type storedSession struct {
@@ -99,6 +100,7 @@ type storedSession struct {
 	Identity   string    `json:"identity"`
 	Credential string    `json:"credential"`
 	Expires    time.Time `json:"expires"`
+	Seen       time.Time `json:"seen"`
 }
 
 func newSessionStore() *sessionStore { return &sessionStore{m: map[string]sessionEntry{}} }
@@ -123,7 +125,7 @@ func openSessionStore(root string) *sessionStore {
 	now := time.Now()
 	for _, e := range stored {
 		if now.Before(e.Expires) && e.Hash != "" {
-			s.m[e.Hash] = sessionEntry{identity: e.Identity, credential: e.Credential, expires: e.Expires}
+			s.m[e.Hash] = sessionEntry{identity: e.Identity, credential: e.Credential, expires: e.Expires, seen: e.Seen}
 		}
 	}
 	return s
@@ -142,7 +144,7 @@ func (s *sessionStore) persist() {
 	}
 	stored := make([]storedSession, 0, len(s.m))
 	for hash, e := range s.m {
-		stored = append(stored, storedSession{Hash: hash, Identity: e.identity, Credential: e.credential, Expires: e.expires})
+		stored = append(stored, storedSession{Hash: hash, Identity: e.identity, Credential: e.credential, Expires: e.expires, Seen: e.seen})
 	}
 	raw, err := json.Marshal(stored)
 	if err == nil {
@@ -167,9 +169,27 @@ func (s *sessionStore) create(identity, credential string) (string, error) {
 			delete(s.m, k)
 		}
 	}
-	s.m[sessionHash(id)] = sessionEntry{identity: identity, credential: credential, expires: now.Add(sessionTTL)}
+	s.m[sessionHash(id)] = sessionEntry{identity: identity, credential: credential, expires: now.Add(sessionTTL), seen: now}
 	s.persist()
 	return id, nil
+}
+
+// active reports the identities with a live session and when each last made
+// a request, so the interface can show who is here.
+func (s *sessionStore) active() map[string]time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	out := map[string]time.Time{}
+	for _, e := range s.m {
+		if now.After(e.expires) {
+			continue
+		}
+		if last, ok := out[e.identity]; !ok || e.seen.After(last) {
+			out[e.identity] = e.seen
+		}
+	}
+	return out
 }
 
 // lookup returns a live session without extending it.
@@ -191,9 +211,10 @@ func (s *sessionStore) lookup(id string) (sessionEntry, bool) {
 	return e, true
 }
 
-// touch slides a live session's expiry forward. The stored table is
-// rewritten only once the expiry has moved by a minute, not on every
-// request.
+// touch slides a live session's expiry forward and notes the request. The
+// stored table is rewritten only once the expiry has moved by a minute, not
+// on every request; "last seen" is precise in memory and approximate across
+// a restart.
 func (s *sessionStore) touch(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -202,10 +223,15 @@ func (s *sessionStore) touch(id string) {
 	if !ok || time.Now().After(e.expires) {
 		return
 	}
-	next := time.Now().Add(sessionTTL)
-	if next.Sub(e.expires) >= time.Minute {
+	now := time.Now()
+	e.seen = now
+	next := now.Add(sessionTTL)
+	persist := next.Sub(e.expires) >= time.Minute
+	if persist {
 		e.expires = next
-		s.m[hash] = e
+	}
+	s.m[hash] = e
+	if persist {
 		s.persist()
 	}
 }

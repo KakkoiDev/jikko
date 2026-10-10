@@ -8,8 +8,7 @@ import (
 	jikko "github.com/KakkoiDev/jikko"
 )
 
-// Pages for creating, renaming and deleting pages, the "For you" page and
-// the problems page. Each reuses a core operation and answers through the
+// Pages for creating, renaming and deleting pages, and the problems page. Each reuses a core operation and answers through the
 // same templates, anti-forgery check and permission filter as the rest.
 
 // newView is the create-page form.
@@ -28,12 +27,6 @@ type changeReport struct {
 type changeList struct {
 	Label   string
 	Changes []jikko.RefChange
-}
-
-// forYouView lists what addresses the viewer.
-type forYouView struct {
-	Mentions []*jikko.Page
-	Assigned []*jikko.Page
 }
 
 // problemsView groups check results by page.
@@ -211,23 +204,6 @@ func (s *server) operationFailed(w http.ResponseWriter, r *http.Request, ws *jik
 		return
 	}
 	s.respond(w, r, status, pageData{Actor: actor, CSRF: s.csrfFor(w, r), Error: err.Error(), Detail: s.detail(ws, actor, pages[0])})
-}
-
-// forYou lists the pages that mention the viewer, directly or through a
-// group, and the tasks assigned to them.
-func (s *server) forYou(w http.ResponseWriter, r *http.Request) {
-	ws, err := s.cache.load()
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	actor := s.actor(r, ws, true)
-	if actor == "" {
-		s.refuse(w, r, http.StatusUnauthorized, actor, "Log in to see what is addressed to you.")
-		return
-	}
-	view := &forYouView{Mentions: ws.Mentions(actor), Assigned: ws.AssignedTo(actor)}
-	s.respond(w, r, http.StatusOK, pageData{Actor: actor, CSRF: s.csrfFor(w, r), ForYou: view})
 }
 
 // problems shows what `jikko check` reports, for the pages the viewer may

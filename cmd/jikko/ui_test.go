@@ -805,7 +805,7 @@ func TestRenameAndDeleteForms(t *testing.T) {
 		t.Fatalf("rename = %d %q\n%s", rec.Code, rec.Header().Get("HX-Push-Url"), rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Renamed plan.md to plans/v1.md.", "Rewritten to keep pointing", `<a href="/p/open.md">open.md</a>`, "<code>plan</code>", "<code>v1</code>"} {
+	for _, want := range []string{"Renamed plan.md to plans/v1.md.", "Rewritten to keep pointing", `<a href="/p/open.md">open.md</a>`, `<code class="jk-inline-code">plan</code>`, `<code class="jk-inline-code">v1</code>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in rename report:\n%s", want, body)
 		}
@@ -841,47 +841,32 @@ func TestRenameAndDeleteForms(t *testing.T) {
 	}
 }
 
-func TestForYouProblemsSearchAndCounts(t *testing.T) {
+func TestProblemsPageAndThreadCounts(t *testing.T) {
 	u := uiWorkspace(t)
-	if err := os.WriteFile(filepath.Join(u.dir, "t1.md"), []byte("---\ntype: task\nstatus: doing\nassignee: bob\n---\n# First task\n\nAsk @carol. [[nowhere]]\n\n<!--comment:c1-->Ask<!--/comment:c1-->\n\n<!--comment-thread:c1\n@carol: ok\n-->\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(u.dir, "t1.md"), []byte("---\ntype: task\nstatus: doing\n---\n# First task\n\nAsk @carol. [[nowhere]]\n\n<!--comment:c1-->Ask<!--/comment:c1-->\n\n<!--comment-thread:c1\n@carol: ok\n-->\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if rec := u.get(t, "", "/me"); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("anonymous /me = %d", rec.Code)
-	}
-	body := u.get(t, "bob", "/me").Body.String()
-	if !strings.Contains(body, "Tasks assigned to you") || !strings.Contains(body, `<a href="/p/t1.md">First task</a>`) || !strings.Contains(body, "1 open") {
-		t.Fatalf("bob's for-you page:\n%s", body)
-	}
-	if body := u.get(t, "carol", "/me").Body.String(); !strings.Contains(body, "Pages that mention you") || !strings.Contains(body, "First task") || strings.Contains(body, "Tasks assigned to you</h3><div") {
-		t.Fatalf("carol's for-you page:\n%s", body)
-	}
-	// Problems are filtered to readable pages and the hidden ones counted.
+	// Problems are filtered to readable pages and the hidden ones counted;
+	// warnings are listed with them.
 	if err := os.WriteFile(filepath.Join(u.dir, "secret.md"), []byte("---\npermissions:\n  admin: alice\n---\n# Secret\n\n[[gone]]\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	body = u.get(t, "", "/problems").Body.String()
-	if !strings.Contains(body, `unresolved &#34;nowhere&#34;`) || strings.Contains(body, "gone") {
-		t.Fatalf("problems page:\n%s", body)
+	body := u.get(t, "", "/problems").Body.String()
+	for _, want := range []string{`unresolved &#34;nowhere&#34;`, "task is in progress but has no assignee", "1 report(s) concern pages you may not read"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("problems page lacks %q:\n%s", want, body)
+		}
 	}
-	if !strings.Contains(body, "1 report(s) concern pages you may not read") {
-		t.Fatalf("hidden count missing:\n%s", body)
+	if strings.Contains(body, "gone") {
+		t.Fatalf("problems page discloses an unreadable page:\n%s", body)
 	}
 	if body := u.get(t, "alice", "/problems").Body.String(); !strings.Contains(body, `unresolved &#34;gone&#34;`) || strings.Contains(body, "you may not read") {
 		t.Fatalf("admin's problems page:\n%s", body)
 	}
-	// Search by title or path; the list and its stream carry the query.
-	body = u.get(t, "", "/?q=FIRST").Body.String()
-	if !strings.Contains(body, "First task") || strings.Contains(body, "Second task") || !strings.Contains(body, `hx-sse:connect="/events?q=FIRST"`) {
-		t.Fatalf("search:\n%s", body)
+	if body := u.get(t, "", "/").Body.String(); !strings.Contains(body, "1 open thread") {
+		t.Fatalf("thread count missing:\n%s", body)
 	}
-	if body := u.get(t, "", "/pages?q=t2&type=task").Body.String(); !strings.Contains(body, "Second task") || strings.Contains(body, "First task") {
-		t.Fatalf("search by path:\n%s", body)
-	}
-	if body := u.get(t, "", "/").Body.String(); !strings.Contains(body, `jk-comment-count" data-variant="outline" title="unresolved comments">1 open</span>`) {
-		t.Fatalf("comment count missing:\n%s", body)
-	}
-	for name, target := range map[string]string{"new": "/new", "me": "/me", "problems": "/problems", "search": "/?q=task"} {
+	for name, target := range map[string]string{"new": "/new", "problems": "/problems", "missing": "/nope", "forbidden": "/edit/secret.md"} {
 		lower := strings.ToLower(u.get(t, "bob", target).Body.String())
 		for _, banned := range []string{"<style", " style=", "javascript:", "hx-on", "hx-live"} {
 			if strings.Contains(lower, banned) {

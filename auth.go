@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,6 +25,41 @@ var ErrAuthentication = errors.New("authentication failed")
 type Credential struct {
 	Identity  string `yaml:"identity" json:"identity"`
 	TokenHash string `yaml:"token_hash" json:"token_hash"`
+	// Created is when the credential was made, in RFC 3339; empty for
+	// credentials made before it was recorded.
+	Created string `yaml:"created,omitempty" json:"created,omitempty"`
+}
+
+// CredentialInfo describes a stored credential without its hash.
+type CredentialInfo struct {
+	Identity string `json:"identity"`
+	// ID identifies the credential for revocation: a prefix of its hash,
+	// which is not a bearer token and authenticates nobody.
+	ID      string `json:"id"`
+	Created string `json:"created,omitempty"`
+}
+
+// credentialIDLength is how many hash characters identify a credential.
+const credentialIDLength = 12
+
+func credentialID(c Credential) string {
+	if len(c.TokenHash) > credentialIDLength {
+		return c.TokenHash[:credentialIDLength]
+	}
+	return c.TokenHash
+}
+
+// Credentials lists the stored credentials in file order.
+func (w *Workspace) Credentials() ([]CredentialInfo, error) {
+	a, err := LoadAuth(w.Root)
+	if err != nil {
+		return nil, err
+	}
+	out := []CredentialInfo{}
+	for _, c := range a.Credentials {
+		out = append(out, CredentialInfo{Identity: c.Identity, ID: credentialID(c), Created: c.Created})
+	}
+	return out, nil
 }
 
 type AuthFile struct {
@@ -128,7 +164,7 @@ func (w *Workspace) CreateCredential(identity string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	a.Credentials = append(a.Credentials, Credential{Identity: strings.TrimSuffix(p.Path, ".md"), TokenHash: tokenHash(token)})
+	a.Credentials = append(a.Credentials, Credential{Identity: strings.TrimSuffix(p.Path, ".md"), TokenHash: tokenHash(token), Created: time.Now().UTC().Format(time.RFC3339)})
 	if err := saveAuth(w.Root, a); err != nil {
 		return "", err
 	}
@@ -220,6 +256,39 @@ func (w *Workspace) RevokeCredentials(identity string) error {
 			return fmt.Errorf("identity %q not found or ambiguous, and no credential is stored under that name", identity)
 		}
 		return nil
+	}
+	a.Credentials = kept
+	return saveAuth(w.Root, a)
+}
+
+// RevokeCredential removes the one credential of an identity whose id
+// (as Credentials lists it, or any longer prefix of its hash) is given, so
+// one token can be withdrawn while the identity's others keep working.
+func (w *Workspace) RevokeCredential(identity, id string) error {
+	id = strings.TrimSpace(id)
+	if len(id) < credentialIDLength {
+		return fmt.Errorf("credential id must be at least %d characters; see `jikko auth list`", credentialIDLength)
+	}
+	stem := strings.TrimSuffix(strings.TrimSpace(filepath.ToSlash(identity)), ".md")
+	if p, ok := w.ResolveIdentity(identity); ok {
+		stem = strings.TrimSuffix(p.Path, ".md")
+	}
+	defer w.lock()()
+	a, err := LoadAuth(w.Root)
+	if err != nil {
+		return err
+	}
+	kept := make([]Credential, 0, len(a.Credentials))
+	removed := 0
+	for _, c := range a.Credentials {
+		if c.Identity == stem && strings.HasPrefix(c.TokenHash, id) {
+			removed++
+			continue
+		}
+		kept = append(kept, c)
+	}
+	if removed == 0 {
+		return fmt.Errorf("no credential %q for identity %q", id, identity)
 	}
 	a.Credentials = kept
 	return saveAuth(w.Root, a)
