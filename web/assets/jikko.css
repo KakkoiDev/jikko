@@ -41,6 +41,14 @@
 .jk-embed-ref { font-size: 0.75rem; }
 .jk-embed-stop, .jk-missing { color: var(--muted-foreground, #6b7280); font-style: italic; }
 .jk-media img, .jk-media video { max-width: 100%; height: auto; border-radius: 0.5rem; }
+.jk-body img { max-width: 100%; height: auto; }
+.jk-body del { color: var(--muted-foreground, #6b7280); }
+.jk-pdf { width: 100%; height: 40rem; border: 1px solid var(--border, #d1d5db); border-radius: 0.5rem; background: var(--muted, #f3f4f6); }
+.jk-table { border-collapse: collapse; margin: 0 0 0.75rem; max-width: 100%; display: block; overflow-x: auto; }
+.jk-table th, .jk-table td { border: 1px solid var(--border, #d1d5db); padding: 0.3rem 0.6rem; text-align: left; vertical-align: top; }
+.jk-table th { background: var(--muted, #f3f4f6); font-weight: 600; }
+.jk-align-right { text-align: right !important; }
+.jk-align-center { text-align: center !important; }
 .jk-file { display: inline-block; border: 1px solid var(--border, #d1d5db); border-radius: 0.5rem; padding: 0.5rem 0.75rem; }
 .jk-comments h3 { font-weight: 600; margin-bottom: 0.5rem; }
 .jk-thread { margin-bottom: 0.75rem; }

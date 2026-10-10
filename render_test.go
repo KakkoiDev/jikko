@@ -25,7 +25,8 @@ var allowedTags = map[string]bool{
 	"pre": true, "code": true, "blockquote": true, "ul": true, "ol": true, "li": true,
 	"hr": true, "a": true, "strong": true, "em": true, "mark": true, "span": true,
 	"figure": true, "figcaption": true, "div": true, "img": true, "video": true,
-	"audio": true, "input": true,
+	"audio": true, "input": true, "table": true, "thead": true, "tbody": true,
+	"tr": true, "th": true, "td": true, "del": true, "iframe": true,
 }
 
 func assertSafeHTML(t *testing.T, out string) {
@@ -128,11 +129,11 @@ func TestRenderCommentsAsAnchors(t *testing.T) {
 func TestRenderEmbeds(t *testing.T) {
 	d := t.TempDir()
 	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
-	writeTest(t, d, "a.md", "# A\n\n![[b]]\n\n![[diagram.png]]\n\n![[talk.mp4]]\n\n![[notes.pdf]]\n\n![[secret]]\n\n![[missing]]\n\n![[board]]\n")
+	writeTest(t, d, "a.md", "# A\n\n![[b]]\n\n![[diagram.png]]\n\n![[talk.mp4]]\n\n![[notes.zip]]\n\n![[secret]]\n\n![[missing]]\n\n![[board]]\n")
 	writeTest(t, d, "b.md", "# B <i>\n\nInside b.\n\n![[a]]\n")
 	writeTest(t, d, "secret.md", "---\npermissions:\n  admin: alice\n---\n# Secret title\n\nClassified.\n")
 	writeTest(t, d, "board.md", "---\ntype: view\nfilter:\n  type: identity\n---\n")
-	for _, f := range []string{"diagram.png", "talk.mp4", "notes.pdf"} {
+	for _, f := range []string{"diagram.png", "talk.mp4", "notes.zip"} {
 		if err := os.WriteFile(filepath.Join(d, f), []byte("x"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -145,7 +146,7 @@ func TestRenderEmbeds(t *testing.T) {
 		"Embed cycle: a.md already appears above.",
 		`<img src="/files/diagram.png" alt="diagram.png" loading="lazy">`,
 		`<video controls preload="metadata" src="/files/talk.mp4"></video>`,
-		`<a class="jk-file" href="/files/notes.pdf" download>notes.pdf</a>`,
+		`<a class="jk-file" href="/files/notes.zip" download>notes.zip</a>`,
 		`<code class="jk-embed-ref">![[secret]]</code> is not available.`,
 		`<code class="jk-embed-ref">![[missing]]</code> is not available.`,
 		`<ul class="jk-view-list"><li><a href="/p/alice.md">alice</a></li></ul>`,
@@ -271,5 +272,61 @@ func TestRenderLargePagesStayFast(t *testing.T) {
 	}
 	if strings.Count(out, "<em>a</em>") != 20000 || strings.Count(out, `<mark class="jk-anchor"`) != 3000 {
 		t.Fatal("large page rendered incompletely")
+	}
+}
+
+// Ordinary Markdown works without conversion (specification §2): tables,
+// images, strikethrough, and task lists render, and a PDF embeds inline.
+func TestRenderOrdinaryMarkdown(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "doc.md", "# Doc\n\n"+
+		"| Name | Count | Note |\n|:-----|------:|:----:|\n| a \\| b | 1 | **x** |\n| c | 2 |\n\n"+
+		"![Diagram](img/diagram.png) ![](missing.png) ![remote](https://example.com/a.png) ![bad](vbscript:x) ![enc](img/sp%20ace.png) ![doc](report.pdf)\n\n"+
+		"~~gone~~ and ~~**still**~~\n\n"+
+		"- [ ] open\n- [x] done\n\n"+
+		"![[report.pdf]]\n\n"+
+		"not | a table\n")
+	for _, f := range []string{"img/diagram.png", "img/sp ace.png", "report.pdf"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(d, f)), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, f), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := openTest(t, d)
+	out := renderPage(t, w, "", "doc")
+	assertSafeHTML(t, out)
+	for _, want := range []string{
+		`<table class="jk-table"><thead><tr><th class="jk-align-left">Name</th><th class="jk-align-right">Count</th><th class="jk-align-center">Note</th></tr></thead><tbody>`,
+		`<tr><td class="jk-align-left">a | b</td><td class="jk-align-right">1</td><td class="jk-align-center"><strong>x</strong></td></tr>`,
+		`<tr><td class="jk-align-left">c</td><td class="jk-align-right">2</td><td class="jk-align-center"></td></tr>`,
+		`<img src="/files/img/diagram.png" alt="Diagram" loading="lazy">`,
+		`<span class="jk-unresolved">missing.png</span>`,
+		`<a class="jk-remote-image" href="https://example.com/a.png" rel="noopener noreferrer">remote</a>`,
+		` bad `,
+		`<img src="/files/img/sp%20ace.png" alt="enc" loading="lazy">`,
+		`<a class="jk-ref" href="/files/report.pdf">doc</a>`,
+		`<del>gone</del> and <del><strong>still</strong></del>`,
+		`<li><input type="checkbox" disabled> open</li>`,
+		`<li><input type="checkbox" disabled checked> done</li>`,
+		`<iframe class="jk-pdf" src="/files/report.pdf" title="report.pdf" loading="lazy"></iframe>`,
+		`<a href="/files/report.pdf" download>Download report.pdf</a>`,
+		`<p>not | a table</p>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "vbscript:") {
+		t.Fatalf("unsafe image source kept:\n%s", out)
+	}
+	// A Markdown image makes its file readable to the page's readers, like
+	// an embed does; a web address is not a workspace file.
+	if _, ok := w.ReadableFile("", "img/diagram.png"); !ok {
+		t.Fatal("image file not readable")
+	}
+	if _, ok := w.ReadableFile("", "img/sp ace.png"); !ok {
+		t.Fatal("percent-encoded image file not readable")
 	}
 }

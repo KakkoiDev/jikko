@@ -721,7 +721,12 @@ func (s *server) serveFile(w http.ResponseWriter, r *http.Request) {
 	}
 	ext := strings.ToLower(path.Ext(file))
 	h := w.Header()
-	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	h.Set("Content-Security-Policy", "default-src 'none'; sandbox; frame-ancestors 'self'")
+	if ext == ".pdf" {
+		// A PDF embed is framed by a page of this site; nothing else may
+		// frame it.
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+	}
 	h.Set("Cache-Control", "private, no-cache")
 	ctype := mime.TypeByExtension(ext)
 	if ctype == "" || !inlineTypes[ext] {

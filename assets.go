@@ -138,6 +138,7 @@ func (w *Workspace) ReadableFile(actor, rel string) (string, bool) {
 			continue
 		}
 		refs := append(append([]string{}, p.Links...), p.Embeds...)
+		refs = append(refs, imageSources(p.Body)...)
 		if p.Kind == Task {
 			proofs, _ := taskRefs(p, "proof")
 			refs = append(refs, proofs...)

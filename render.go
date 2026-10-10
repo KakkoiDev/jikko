@@ -116,6 +116,9 @@ var (
 	listPattern       = regexp.MustCompile(`^( *)([-*+]|[0-9]{1,9}[.)])[ \t]+(.*)$`)
 	blockEmbedPattern = regexp.MustCompile(`^ {0,3}!\[\[([^\[\]\n]+)\]\][ \t]*$`)
 	taskPattern       = regexp.MustCompile(`^\[([ xX])\][ \t]+`)
+	// tableDelimPattern is the row under a table's header: cells of dashes
+	// with optional colons for alignment (GitHub Flavored Markdown).
+	tableDelimPattern = regexp.MustCompile(`^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$`)
 )
 
 func (r *Renderer) body(from, body string) string {
@@ -186,6 +189,9 @@ func (r *Renderer) blocks(from string, lines []string) string {
 			ref := strings.TrimSpace(blockEmbedPattern.FindStringSubmatch(line)[1])
 			b.WriteString(r.embed(from, ref))
 			i++
+		case isTableStart(lines, i):
+			flush()
+			i += r.table(&b, from, lines[i:])
 		default:
 			para = append(para, line)
 			i++
@@ -262,10 +268,97 @@ func leadingSpaces(s string) int {
 	return len(s) - len(strings.TrimLeft(s, " "))
 }
 
+// isTableStart reports whether lines[i] opens a GFM table: a header row with
+// a delimiter row of the same width under it.
+func isTableStart(lines []string, i int) bool {
+	if i+1 >= len(lines) || !strings.Contains(lines[i], "|") || !tableDelimPattern.MatchString(lines[i+1]) {
+		return false
+	}
+	return len(tableCells(lines[i])) == len(tableCells(lines[i+1]))
+}
+
+// tableCells splits a table row into its cells. A pipe escaped as \| is
+// text, and one leading and one trailing pipe are delimiters, not cells.
+func tableCells(row string) []string {
+	row = strings.TrimSpace(row)
+	var cells []string
+	var cell strings.Builder
+	for i := 0; i < len(row); i++ {
+		switch {
+		case row[i] == '\\' && i+1 < len(row) && row[i+1] == '|':
+			cell.WriteByte('|')
+			i++
+		case row[i] == '|':
+			cells = append(cells, cell.String())
+			cell.Reset()
+		default:
+			cell.WriteByte(row[i])
+		}
+	}
+	cells = append(cells, cell.String())
+	if len(cells) > 0 && strings.HasPrefix(row, "|") {
+		cells = cells[1:]
+	}
+	if len(cells) > 0 && strings.HasSuffix(row, "|") && !strings.HasSuffix(row, "\\|") {
+		cells = cells[:len(cells)-1]
+	}
+	for i, c := range cells {
+		cells[i] = strings.TrimSpace(c)
+	}
+	return cells
+}
+
+// table renders the GFM table starting at lines[0] and returns how many
+// lines it used. The body ends at a blank line or a line without a pipe;
+// short rows are padded and long ones cut to the header's width.
+func (r *Renderer) table(b *strings.Builder, from string, lines []string) int {
+	header := tableCells(lines[0])
+	aligns := make([]string, len(header))
+	for i, d := range tableCells(lines[1]) {
+		switch left, right := strings.HasPrefix(d, ":"), strings.HasSuffix(d, ":"); {
+		case left && right:
+			aligns[i] = "center"
+		case right:
+			aligns[i] = "right"
+		case left:
+			aligns[i] = "left"
+		}
+	}
+	cell := func(tag string, i int, text string) {
+		b.WriteString("<" + tag)
+		if aligns[i] != "" {
+			b.WriteString(` class="jk-align-` + aligns[i] + `"`)
+		}
+		b.WriteString(">" + r.inline(from, text) + "</" + tag + ">")
+	}
+	b.WriteString(`<table class="jk-table"><thead><tr>`)
+	for i, h := range header {
+		cell("th", i, h)
+	}
+	b.WriteString("</tr></thead><tbody>\n")
+	n := 2
+	for n < len(lines) && strings.TrimSpace(lines[n]) != "" && strings.Contains(lines[n], "|") {
+		cells := tableCells(lines[n])
+		b.WriteString("<tr>")
+		for i := range header {
+			text := ""
+			if i < len(cells) {
+				text = cells[i]
+			}
+			cell("td", i, text)
+		}
+		b.WriteString("</tr>\n")
+		n++
+	}
+	b.WriteString("</tbody></table>\n")
+	return n
+}
+
 var (
 	mediaImage = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".avif": true, ".svg": true}
 	mediaVideo = map[string]bool{".mp4": true, ".webm": true, ".ogv": true, ".mov": true}
 	mediaAudio = map[string]bool{".mp3": true, ".ogg": true, ".oga": true, ".wav": true, ".m4a": true, ".flac": true}
+	mediaPDF   = map[string]bool{".pdf": true}
 )
 
 // embed renders ![[ref]] on a line of its own (specification §5.2): a
@@ -305,6 +398,11 @@ func (r *Renderer) embed(from, ref string) string {
 			media = `<video controls preload="metadata" src="` + src + `"></video>`
 		case mediaAudio[ext]:
 			media = `<audio controls preload="metadata" src="` + src + `"></audio>`
+		case mediaPDF[ext]:
+			// The document is framed from /files/, whose sandboxing policy
+			// keeps anything inside it out of the application's origin.
+			media = `<iframe class="jk-pdf" src="` + src + `" title="` + name + `" loading="lazy"></iframe>`
+			anchor += ` <a href="` + src + `" download>Download ` + name + `</a>`
 		default:
 			return `<a class="jk-file" href="` + src + `" download>` + name + "</a>\n"
 		}
@@ -350,8 +448,10 @@ func (r *Renderer) file(from, ref string) (string, bool) {
 var (
 	inlineWiki     = regexp.MustCompile(`!?\[\[([^\[\]\n]+)\]\]`)
 	inlineLink     = regexp.MustCompile(`\[([^\[\]\n]+)\]\(([^()\s]+)\)`)
+	inlineImage    = regexp.MustCompile(`!\[([^\[\]\n]*)\]\(([^()\s]+)\)`)
 	inlineStrong   = regexp.MustCompile(`\*\*([^*\n]+?)\*\*|__([^_\n]+?)__`)
 	inlineEm       = regexp.MustCompile(`\*([^*\s](?:[^*\n]*[^*\s])?)\*`)
+	inlineDel      = regexp.MustCompile(`~~([^~\n]+?)~~`)
 	inlineAutolink = regexp.MustCompile(`https?://[^\s<>()\[\]"']+[^\s<>()\[\]"'.,;:!?]`)
 )
 
@@ -418,8 +518,8 @@ var inlineKinds = []struct {
 	name    string
 	pattern *regexp.Regexp
 }{
-	{"wiki", inlineWiki}, {"link", inlineLink}, {"strong", inlineStrong},
-	{"em", inlineEm}, {"url", inlineAutolink}, {"mention", mentionPattern},
+	{"wiki", inlineWiki}, {"image", inlineImage}, {"link", inlineLink}, {"strong", inlineStrong},
+	{"em", inlineEm}, {"del", inlineDel}, {"url", inlineAutolink}, {"mention", mentionPattern},
 }
 
 // inlineScan finds the earliest inline token at or after a position. Each
@@ -511,12 +611,17 @@ func (r *Renderer) token(from, kind, t string) string {
 			return `<a href="` + html.EscapeString(href) + `" rel="noopener noreferrer">` + html.EscapeString(m[1]) + "</a>"
 		}
 		return html.EscapeString(m[1])
+	case "image":
+		m := inlineImage.FindStringSubmatch(t)
+		return r.image(from, m[1], m[2])
 	case "url":
 		return `<a href="` + html.EscapeString(t) + `" rel="noopener noreferrer">` + html.EscapeString(t) + "</a>"
 	case "strong":
 		return "<strong>" + r.inline(from, t[2:len(t)-2]) + "</strong>"
 	case "em":
 		return "<em>" + r.inline(from, t[1:len(t)-1]) + "</em>"
+	case "del":
+		return "<del>" + r.inline(from, t[2:len(t)-2]) + "</del>"
 	case "mention":
 		name := strings.TrimRight(t[1:], "./-")
 		tail := t[1+len(name):]
@@ -527,6 +632,63 @@ func (r *Renderer) token(from, kind, t string) string {
 		return out + html.EscapeString(tail)
 	}
 	return html.EscapeString(t)
+}
+
+// image renders ![alt](src), ordinary Markdown for a picture. The source
+// takes the same rules as a link: a path in the workspace is served through
+// the file route, to a reader of this page; a web address is shown as a link
+// rather than fetched, since the interface loads no third-party content; and
+// any other scheme is refused and only the text shown.
+func (r *Renderer) image(from, alt, src string) string {
+	label := alt
+	if label == "" {
+		label = src
+	}
+	href, ok := safeHref(src)
+	if !ok {
+		return html.EscapeString(label)
+	}
+	if u, err := url.Parse(href); err == nil && u.Scheme != "" {
+		if u.Scheme == "mailto" {
+			return html.EscapeString(label)
+		}
+		return `<a class="jk-remote-image" href="` + html.EscapeString(href) + `" rel="noopener noreferrer">` + html.EscapeString(label) + "</a>"
+	}
+	if strings.HasPrefix(href, "/") {
+		return `<img src="` + html.EscapeString(href) + `" alt="` + html.EscapeString(alt) + `" loading="lazy">`
+	}
+	file, ok := r.file(from, imageSource(src))
+	if !ok {
+		return `<span class="jk-unresolved">` + html.EscapeString(label) + "</span>"
+	}
+	target := html.EscapeString(r.links.File(file))
+	if !mediaImage[strings.ToLower(path.Ext(file))] {
+		return `<a class="jk-ref" href="` + target + `">` + html.EscapeString(label) + "</a>"
+	}
+	return `<img src="` + target + `" alt="` + html.EscapeString(alt) + `" loading="lazy">`
+}
+
+// imageSource turns the source of a Markdown image into a file reference:
+// percent-encoding is undone and a leading ./ dropped.
+func imageSource(src string) string {
+	if decoded, err := url.PathUnescape(src); err == nil {
+		src = decoded
+	}
+	return strings.TrimPrefix(src, "./")
+}
+
+// imageSources lists the workspace files a body's Markdown images name, in
+// prose, so a reader of the page may fetch them (see ReadableFile).
+func imageSources(body string) []string {
+	var out []string
+	scanProse(body, func(line string) {
+		for _, m := range inlineImage.FindAllStringSubmatch(line, -1) {
+			if u, err := url.Parse(m[2]); err == nil && u.Scheme == "" && !strings.HasPrefix(m[2], "/") {
+				out = append(out, imageSource(m[2]))
+			}
+		}
+	})
+	return out
 }
 
 // safeHref accepts web and mail links and links within the site. Anything
