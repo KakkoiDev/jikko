@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{if .Detail}}{{.Detail.Title}} · {{else if .Edit}}Editing {{.Edit.Title}} · {{end}}Jikko</title>
+<title>{{if .Detail}}{{.Detail.Title}} · {{else if .Edit}}Editing {{.Edit.Title}} · {{else if .New}}New page · {{else if .ForYou}}For you · {{else if .Problems}}Problems · {{end}}Jikko</title>
 <link rel="stylesheet" href="/assets/basecoat.min.css">
 <link rel="stylesheet" href="/assets/jikko.css">
 <script src="/assets/htmx.min.js"></script>
@@ -12,17 +12,20 @@
 <body class="bg-background text-foreground">
 <main class="jk-main">
 <header class="jk-top">
-<div><h1 class="jk-brand"><a href="/">Jikko</a></h1><p class="jk-muted">Structured work in plain Markdown.</p></div>
+<div><h1 class="jk-brand"><a href="/">Jikko</a></h1><nav class="jk-nav" aria-label="Sections"><a href="/">Workspace</a>{{if .Actor}} <a href="/me">For you</a>{{end}} <a href="/problems">Problems</a>{{if .Actor}} <a href="/new">New page</a>{{end}}</nav></div>
 {{if .Actor}}<form method="post" action="/logout" class="jk-inline"><input type="hidden" name="_csrf" value="{{.CSRF}}"><span class="jk-actor">{{.Actor}}</span> <button class="btn" data-variant="outline">Log out</button></form>
 {{else}}<div class="jk-login"><form method="post" action="/login" class="jk-inline"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input class="input" name="token" type="password" placeholder="Token" aria-label="Token" required autocomplete="current-password"><button class="btn">Log in</button></form><p class="jk-help">No token yet? On the host, run <code>jikko auth create &lt;you&gt;</code> and paste the token it prints.</p></div>{{end}}
 </header>
-{{if .Detail}}{{template "detail" .}}{{else if .Edit}}{{template "edit" .}}{{else if .Message}}{{template "message" .}}{{else if eq .Total 0}}{{template "guide" .}}{{else}}<nav class="jk-filters"><button class="btn" data-variant="outline" hx-get="/pages" hx-target="#pages" hx-swap="outerHTML">All</button><button class="btn" data-variant="outline" hx-get="/pages?type=task" hx-target="#pages" hx-swap="outerHTML">Tasks</button><button class="btn" data-variant="outline" hx-get="/pages?type=view" hx-target="#pages" hx-swap="outerHTML">Views</button><button class="btn" data-variant="outline" hx-get="/pages?type=identity" hx-target="#pages" hx-swap="outerHTML">Identities</button></nav>
+{{if .Detail}}{{template "detail" .}}{{else if .Edit}}{{template "edit" .}}{{else if .New}}{{template "new" .}}{{else if .ForYou}}{{template "foryou" .}}{{else if .Problems}}{{template "problems" .}}{{else if .Report}}{{template "report" .}}{{else if .Message}}{{template "message" .}}{{else if eq .Total 0}}{{template "guide" .}}{{else}}<div class="jk-filters">
+<nav aria-label="Type">{{range .Filters}}<button class="btn" data-variant="{{if .Active}}primary{{else}}outline{{end}}" hx-get="{{.URL}}" hx-target="#pages" hx-swap="outerHTML">{{.Label}}</button> {{end}}</nav>
+<form method="get" action="/" class="jk-inline jk-search" role="search"><input class="input" type="search" name="q" value="{{.Search}}" placeholder="Search title or path" aria-label="Search title or path"><button class="btn" data-variant="outline">Search</button>{{if .Search}} <a class="btn" data-variant="ghost" href="/">Clear</a>{{end}}</form>
+</div>
 {{template "pages" .}}{{end}}
 </main>
 </body>
 </html>{{end}}
 
-{{define "pages"}}<section id="pages" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML"><div class="item-group">{{range .Pages}}<article class="item" data-variant="outline"><section><h3><a href="{{pageURL .Path}}">{{.Title}}</a></h3><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.{{if .Query}} Nothing matches the filter.{{else if not .Actor}} Log in to see pages restricted to identities.{{end}}</p></section></article>{{end}}</div></section>{{end}}
+{{define "pages"}}<section id="pages" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML"><div class="item-group">{{range .Pages}}<article class="item" data-variant="outline"><section><h3><a href="{{pageURL .Path}}">{{.Title}}</a>{{if .Comments}} <span class="badge jk-comment-count" data-variant="outline" title="unresolved comments">{{len .Comments}} open</span>{{end}}</h3><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.{{if .Query}} Nothing matches the filter.{{else if not .Actor}} Log in to see pages restricted to identities.{{end}}</p></section></article>{{end}}</div></section>{{end}}
 
 {{define "message"}}<section id="page" class="jk-page jk-message">
 <div class="alert" data-variant="destructive" role="alert"><section><h2>{{statusTitle .Status}}</h2><p>{{.Message}}</p></section></div>
@@ -54,7 +57,7 @@ is enough. Groups are identities with a <code>members</code> list.</li>
 {{define "flash"}}{{if .Flash}}<div class="alert jk-flash" role="status"><section><p>{{.Flash}}</p></section></div>{{end}}{{if .Error}}<div class="alert jk-flash" data-variant="destructive" role="alert"><section><p>{{.Error}}</p></section></div>{{end}}{{end}}
 
 {{define "detail"}}{{with .Detail}}<section id="page" class="jk-page" data-path="{{.Path}}" data-rev="{{.Rev}}">
-{{template "flash" $}}
+{{template "flash" $}}{{if $.Report}}{{template "changes" $.Report}}{{end}}
 <div id="jk-live" hx-sse:connect="{{liveURL .Path .Rev "view"}}" hx-swap="outerHTML"></div>
 <header class="jk-page-head">
 <div><p class="jk-muted">{{.Kind}} · {{.Path}}</p><h2 class="jk-title">{{.Title}}</h2></div>
@@ -87,6 +90,19 @@ is enough. Groups are identities with a <code>members</code> list.</li>
 </div>{{end}}
 {{if and .CanWrite (not .View)}}<form method="post" action="{{uploadURL .Path}}" hx-post="{{uploadURL .Path}}" hx-target="#page" hx-swap="outerHTML" enctype="multipart/form-data" class="jk-row jk-upload"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><label class="label" for="jk-file">Attach a file</label><input class="input" id="jk-file" type="file" name="file" required><button class="btn" data-variant="outline">Upload and embed</button></form>{{end}}
 {{if .Backlinks}}<footer class="jk-backlinks"><h3>Linked from</h3><ul>{{range .Backlinks}}<li><a href="{{pageURL .Path}}">{{.Title}}</a></li>{{end}}</ul></footer>{{end}}
+{{if .CanWrite}}<details class="jk-manage"><summary>Rename or delete</summary>
+<form method="post" action="{{renameURL .Path}}" hx-post="{{renameURL .Path}}" hx-target="#page" hx-swap="outerHTML" class="jk-rename jk-stack" hx-confirm="Rename {{.Path}}? References to it are rewritten so they keep resolving.">
+<input type="hidden" name="_csrf" value="{{$.CSRF}}">
+<label class="label" for="jk-rename-to">New path</label>
+<div class="jk-row"><input class="input" id="jk-rename-to" name="to" value="{{stem .Path}}" required> <button class="btn" data-variant="outline">Rename</button></div>
+<label class="jk-remove"><input type="checkbox" name="no_rewrite" value="1"> Move the file only and report the references that break</label>
+</form>
+<form method="post" action="{{deleteURL .Path}}" hx-post="{{deleteURL .Path}}" hx-target="#page" hx-swap="outerHTML" class="jk-delete jk-stack" hx-confirm="Delete {{.Path}}? Links to it will no longer resolve. Git history keeps the file.">
+<input type="hidden" name="_csrf" value="{{$.CSRF}}">
+{{if eq .Kind "identity"}}<label class="jk-remove"><input type="checkbox" name="prune" value="1"> Also remove this identity from group members and access policies</label>{{end}}
+<div class="jk-row"><button class="btn" data-variant="destructive">Delete</button> <span class="jk-muted">Refused while the page has unresolved comments.</span></div>
+</form>
+</details>{{end}}
 </section>{{end}}{{end}}
 
 {{define "viewresult"}}{{if .Groups}}<div class="jk-board" data-layout="{{.Spec.Layout}}">{{range .Groups}}<section class="jk-column"><h3>{{if .Key}}{{.Key}}{{else}}(none){{end}} <span class="badge" data-variant="outline">{{len .Pages}}</span></h3><ul>{{range .Pages}}<li><a href="{{pageURL .Path}}">{{.Title}}</a></li>{{end}}</ul></section>{{end}}</div>
@@ -133,3 +149,39 @@ is enough. Groups are identities with a <code>members</code> list.</li>
 </section>
 <footer><button class="btn">Save with these choices</button> <a class="btn" data-variant="outline" href="{{pageURL $.Edit.Path}}">Discard my edit</a></footer>
 </form>{{end}}{{end}}{{end}}
+
+
+{{define "changes"}}<div class="card jk-changes"><header><h3>{{.Title}}</h3></header><section>{{range .Lists}}<h4>{{.Label}}</h4><ul>{{range .Changes}}<li><a href="{{pageURL .Path}}">{{.Path}}</a> <span class="jk-muted">({{.Field}})</span> <code>{{.From}}</code>{{if .To}} → <code>{{.To}}</code>{{end}}</li>{{end}}</ul>{{else}}<p class="jk-muted">No reference was affected.</p>{{end}}{{if .Hidden}}<p class="jk-muted">{{.Hidden}} affected reference(s) are in pages you cannot read.</p>{{end}}</section></div>{{end}}
+
+{{define "report"}}<section id="page" class="jk-page">{{template "flash" .}}{{template "changes" .Report}}<nav class="jk-actions"><a class="btn" data-variant="outline" href="/">Back to the workspace</a></nav></section>{{end}}
+
+{{define "new"}}{{with .New}}<section id="page" class="jk-page">
+<header class="jk-page-head"><div><p class="jk-muted">New page</p><h2 class="jk-title">Create a {{.Type}}</h2></div>
+<nav class="jk-actions"><a class="btn" data-variant="{{if eq .Type "document"}}primary{{else}}outline{{end}}" href="/new">Document</a> <a class="btn" data-variant="{{if eq .Type "task"}}primary{{else}}outline{{end}}" href="/new?type=task">Task</a> <a class="btn" data-variant="{{if eq .Type "identity"}}primary{{else}}outline{{end}}" href="/new?type=identity">Identity</a></nav></header>
+{{if .Error}}<div class="alert" data-variant="destructive" role="alert"><section><p>{{.Error}}</p></section></div>{{end}}
+<form method="post" action="/create" class="jk-stack jk-create">
+<input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="type" value="{{.Type}}">
+<label class="label" for="jk-new-path">Path</label>
+<input class="input" id="jk-new-path" name="path" value="{{.Path}}" placeholder="{{if eq .Type "task"}}tasks/ship-v1{{else if eq .Type "identity"}}people/alice{{else}}notes/meeting{{end}}" required>
+<p class="jk-help">Folders are created as needed; <code>.md</code> is added. {{if eq .Type "task"}}The task starts with <code>status: todo</code>; set its assignee and other properties after creating it.{{else if eq .Type "identity"}}An identity with a <code>members</code> property is a group; give it one in the properties afterwards.{{else}}The page is open to everyone until a <code>permissions</code> mapping restricts it.{{end}}</p>
+<label class="label" for="jk-new-body">Body</label>
+<textarea class="textarea jk-editor" id="jk-new-body" name="body" rows="16" spellcheck="false" placeholder="# Title&#10;&#10;Markdown, [[references]], ![[embeds]] and @mentions.">{{.Body}}</textarea>
+<div class="jk-row"><button class="btn" type="submit">Create</button> <a class="btn" data-variant="ghost" href="/">Cancel</a></div>
+</form>
+</section>{{end}}{{end}}
+
+{{define "foryou"}}{{with .ForYou}}<section id="page" class="jk-page jk-foryou">
+<header class="jk-page-head"><div><p class="jk-muted">{{$.Actor}}</p><h2 class="jk-title">For you</h2></div></header>
+<div class="jk-columns">
+<section><h3>Tasks assigned to you</h3>{{if .Assigned}}<div class="item-group">{{range .Assigned}}<article class="item" data-variant="outline"><section><h4><a href="{{pageURL .Path}}">{{.Title}}</a>{{if .Comments}} <span class="badge jk-comment-count" data-variant="outline">{{len .Comments}} open</span>{{end}}</h4><p class="text-muted-foreground">{{prop2 .Metadata "status"}} · {{.Path}}</p></section></article>{{end}}</div>{{else}}<p class="jk-muted">No task names you, or a group you belong to, as assignee.</p>{{end}}</section>
+<section><h3>Pages that mention you</h3>{{if .Mentions}}<div class="item-group">{{range .Mentions}}<article class="item" data-variant="outline"><section><h4><a href="{{pageURL .Path}}">{{.Title}}</a></h4><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{end}}</div>{{else}}<p class="jk-muted">No page mentions you or a group you belong to.</p>{{end}}</section>
+</div>
+</section>{{end}}{{end}}
+
+{{define "problems"}}{{with .Problems}}<section id="page" class="jk-page jk-problems">
+<header class="jk-page-head"><div><p class="jk-muted">What <code>jikko check</code> reports</p><h2 class="jk-title">Problems</h2></div></header>
+{{if .Groups}}<p>{{.Count}} problem(s) in the pages you may read. Problems are reported, never fatal; a page whose access policy cannot be read is denied to everyone until it is fixed.</p>
+{{range .Groups}}<article class="card jk-problem-group"><header><h3><a href="{{pageURL .Path}}">{{.Title}}</a> <span class="jk-muted">{{.Path}}</span></h3></header><section><ul>{{range .Problems}}<li class="jk-notice" data-kind="problem"><span class="badge" data-variant="outline">{{.Kind}}</span> {{.Message}}</li>{{end}}{{range .Warnings}}<li class="jk-notice" data-kind="warning"><span class="badge" data-variant="outline">{{.Kind}}</span> {{.Message}}</li>{{end}}</ul></section></article>{{end}}
+{{else}}<p>No problems in the pages you may read.</p>{{end}}
+{{if .Hidden}}<p class="jk-muted">{{.Hidden}} report(s) concern pages you may not read.</p>{{end}}
+</section>{{end}}{{end}}

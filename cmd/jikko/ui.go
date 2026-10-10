@@ -38,6 +38,9 @@ var templateFuncs = template.FuncMap{
 	"saveURL":    func(p string) string { return "/save/" + escapedPath(p) },
 	"commentURL": func(p string) string { return "/comment/" + escapedPath(p) },
 	"uploadURL":  func(p string) string { return "/upload/" + escapedPath(p) },
+	"renameURL":  func(p string) string { return "/rename/" + escapedPath(p) },
+	"deleteURL":  func(p string) string { return "/delete/" + escapedPath(p) },
+	"stem":       func(p string) string { return strings.TrimSuffix(p, ".md") },
 	"liveURL": func(p, rev, mode string) string {
 		return "/events/page/" + escapedPath(p) + "?" + url.Values{"rev": {rev}, "mode": {mode}}.Encode()
 	},
@@ -66,20 +69,24 @@ var templateFuncs = template.FuncMap{
 		}
 		return rev
 	},
-	"prop": func(it jikko.ViewItem, key string) string {
-		switch v := it.Metadata[key].(type) {
-		case nil:
-			return ""
-		case []any:
-			parts := make([]string, 0, len(v))
-			for _, x := range v {
-				parts = append(parts, fmt.Sprint(x))
-			}
-			return strings.Join(parts, ", ")
-		default:
-			return fmt.Sprint(v)
+	"prop":  func(it jikko.ViewItem, key string) string { return propText(it.Metadata, key) },
+	"prop2": func(m map[string]any, key string) string { return propText(m, key) },
+}
+
+// propText renders a metadata value as one line of text.
+func propText(m map[string]any, key string) string {
+	switch v := m[key].(type) {
+	case nil:
+		return ""
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, x := range v {
+			parts = append(parts, fmt.Sprint(x))
 		}
-	},
+		return strings.Join(parts, ", ")
+	default:
+		return fmt.Sprint(v)
+	}
 }
 
 // escapedPath is a page path for a URL: the same escaping as page links.
@@ -318,6 +325,10 @@ func (s *server) respond(w http.ResponseWriter, r *http.Request, status int, dat
 			name = "detail"
 		case data.Edit != nil:
 			name = "edit"
+		case data.New != nil:
+			name = "new"
+		case data.Report != nil:
+			name = "report"
 		default:
 			name = "message"
 		}

@@ -117,6 +117,9 @@ type pageData struct {
 	Actor string
 	// Status is the HTTP status of a message page.
 	Status int
+	// Search is the title or path filter of the page list.
+	Search  string
+	Filters []filterLink
 	// CSRF is the anti-forgery token every form posts back.
 	CSRF    string
 	Flash   string
@@ -124,6 +127,18 @@ type pageData struct {
 	Message string
 	Detail  *detailView
 	Edit    *editView
+	New     *newView
+	ForYou  *forYouView
+	// Problems is the check report page.
+	Problems *problemsView
+	// Report says what a rename or deletion did to references.
+	Report *changeReport
+}
+
+// filterLink is one of the type filters above the page list.
+type filterLink struct {
+	Label, URL string
+	Active     bool
 }
 
 func serve(args []string) error {
@@ -176,6 +191,21 @@ func newServer(root string, trustProxy bool) *server {
 	}
 }
 
+// searchPages keeps the pages whose title or path contains q, ignoring case.
+func searchPages(pages []*jikko.Page, q string) []*jikko.Page {
+	if q == "" {
+		return pages
+	}
+	q = strings.ToLower(q)
+	out := make([]*jikko.Page, 0, len(pages))
+	for _, p := range pages {
+		if strings.Contains(strings.ToLower(p.Title), q) || strings.Contains(strings.ToLower(p.Path), q) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/assets/", assetHandler())
@@ -183,6 +213,12 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/logout", s.logout)
 	mux.HandleFunc("/pages", s.pages)
 	mux.HandleFunc("/events", s.events)
+	mux.HandleFunc("GET /new", s.newPage)
+	mux.HandleFunc("POST /create", s.createPage)
+	mux.HandleFunc("POST /rename/{path...}", s.renamePage)
+	mux.HandleFunc("POST /delete/{path...}", s.deletePage)
+	mux.HandleFunc("GET /me", s.forYou)
+	mux.HandleFunc("GET /problems", s.problems)
 	mux.HandleFunc("GET /p/{path...}", s.pageDetail)
 	mux.HandleFunc("GET /edit/{path...}", s.editPage)
 	mux.HandleFunc("POST /save/{path...}", s.savePage)
@@ -296,12 +332,32 @@ func (s *server) data(r *http.Request, extend bool) (pageData, error) {
 	if v := q.Get("status"); v != "" {
 		filters.Set("status", v)
 	}
+	search := strings.TrimSpace(q.Get("q"))
+	if search != "" {
+		filters.Set("q", search)
+	}
 	query := ""
 	if encoded := filters.Encode(); encoded != "" {
 		query = "?" + encoded
 	}
 	actor := s.actor(r, ws, extend)
-	return pageData{Pages: visiblePages(ws, actor, ws.List(kind, q.Get("status"))), Total: len(ws.Pages), Query: query, Actor: actor}, nil
+	pages := searchPages(visiblePages(ws, actor, ws.List(kind, q.Get("status"))), search)
+	var links []filterLink
+	for _, f := range []struct{ label, kind string }{{"All", ""}, {"Documents", "document"}, {"Tasks", "task"}, {"Views", "view"}, {"Identities", "identity"}} {
+		v := url.Values{}
+		if f.kind != "" {
+			v.Set("type", f.kind)
+		}
+		if search != "" {
+			v.Set("q", search)
+		}
+		target := "/pages"
+		if encoded := v.Encode(); encoded != "" {
+			target += "?" + encoded
+		}
+		links = append(links, filterLink{Label: f.label, URL: target, Active: string(kind) == f.kind})
+	}
+	return pageData{Pages: pages, Total: len(ws.Pages), Query: query, Search: search, Filters: links, Actor: actor}, nil
 }
 
 // render executes a template for the caller and also reports who the caller

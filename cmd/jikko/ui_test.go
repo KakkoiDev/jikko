@@ -754,3 +754,142 @@ func TestPageEventsFollowSessionAndAccess(t *testing.T) {
 	}
 	closedWithout(dave, "losing read access")
 }
+
+func TestCreatePageForm(t *testing.T) {
+	u := uiWorkspace(t)
+	if rec := u.get(t, "", "/new"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous /new = %d", rec.Code)
+	}
+	if body := u.get(t, "bob", "/new?type=task").Body.String(); !strings.Contains(body, `name="type" value="task"`) {
+		t.Fatalf("task form not offered:\n%s", body)
+	}
+	for _, tc := range []struct{ path, typ, body, want string }{
+		{"notes/meeting", "document", "# Meeting\n\nNotes.", "# Meeting\n\nNotes.\n"},
+		{"tasks/review", "task", "", "---\ntype: task\nstatus: todo\n---\n# review\n"},
+		{"dan", "identity", "# Dan", "---\ntype: identity\n---\n# Dan\n"},
+	} {
+		rec := u.post(t, "bob", "/create", url.Values{"path": {tc.path}, "type": {tc.typ}, "body": {tc.body}}, nil)
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/p/"+tc.path+".md" {
+			t.Fatalf("create %s = %d %s\n%s", tc.path, rec.Code, rec.Header().Get("Location"), rec.Body.String())
+		}
+		if got := u.read(t, tc.path+".md"); got != tc.want {
+			t.Fatalf("%s = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+	rec := u.post(t, "bob", "/create", url.Values{"path": {"dan"}, "type": {"document"}, "body": {"x"}}, nil)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "already exists") {
+		t.Fatalf("duplicate = %d\n%s", rec.Code, rec.Body.String())
+	}
+	if rec := u.post(t, "bob", "/create", url.Values{"path": {"../out"}, "type": {"document"}}, nil); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("escaping path = %d", rec.Code)
+	}
+	if rec := u.post(t, "", "/create", url.Values{"path": {"x"}, "type": {"document"}}, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous create = %d", rec.Code)
+	}
+}
+
+func TestRenameAndDeleteForms(t *testing.T) {
+	u := uiWorkspace(t)
+	// Only a writer sees the forms.
+	if body := u.get(t, "carol", "/p/plan.md").Body.String(); strings.Contains(body, "jk-rename") {
+		t.Fatal("commenter offered the rename form")
+	}
+	if body := u.get(t, "bob", "/p/plan.md").Body.String(); !strings.Contains(body, "jk-rename") || !strings.Contains(body, "jk-delete") {
+		t.Fatal("writer not offered the forms")
+	}
+	if rec := u.post(t, "carol", "/rename/plan.md", url.Values{"to": {"plans/v1"}}, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("commenter rename = %d", rec.Code)
+	}
+	rec := u.post(t, "bob", "/rename/plan.md", url.Values{"to": {"plans/v1"}}, htmx)
+	if rec.Code != http.StatusOK || rec.Header().Get("HX-Push-Url") != "/p/plans/v1.md" {
+		t.Fatalf("rename = %d %q\n%s", rec.Code, rec.Header().Get("HX-Push-Url"), rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Renamed plan.md to plans/v1.md.", "Rewritten to keep pointing", `<a href="/p/open.md">open.md</a>`, "<code>plan</code>", "<code>v1</code>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in rename report:\n%s", want, body)
+		}
+	}
+	if !strings.Contains(u.read(t, "open.md"), "[[v1]]") {
+		t.Fatal("reference not rewritten")
+	}
+	if rec := u.post(t, "bob", "/rename/plans/v1.md", url.Values{"to": {"open"}}, nil); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "already exists") {
+		t.Fatalf("rename onto an existing page = %d", rec.Code)
+	}
+	// Deletion is refused while comments are open, and reports broken links.
+	if _, err := u.s.cache.load(); err != nil {
+		t.Fatal(err)
+	}
+	u.post(t, "carol", "/comment/plans/v1.md", url.Values{"op": {"add"}, "anchor": {"Ship"}, "text": {"Why?"}}, nil)
+	rec = u.post(t, "bob", "/delete/plans/v1.md", nil, nil)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "unresolved comment") {
+		t.Fatalf("delete with comments = %d\n%s", rec.Code, rec.Body.String())
+	}
+	u.post(t, "carol", "/comment/plans/v1.md", url.Values{"op": {"resolve"}, "id": {"c1"}}, nil)
+	rec = u.post(t, "bob", "/delete/plans/v1.md", nil, htmx)
+	if rec.Code != http.StatusOK || rec.Header().Get("HX-Push-Url") != "/" {
+		t.Fatalf("delete = %d\n%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Deleted plans/v1.md.") || !strings.Contains(rec.Body.String(), "No longer resolve") || !strings.Contains(rec.Body.String(), "open.md") {
+		t.Fatalf("delete report:\n%s", rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(u.dir, "plans", "v1.md")); !os.IsNotExist(err) {
+		t.Fatal("page not deleted")
+	}
+	if rec := u.post(t, "", "/delete/open.md", nil, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous delete = %d", rec.Code)
+	}
+}
+
+func TestForYouProblemsSearchAndCounts(t *testing.T) {
+	u := uiWorkspace(t)
+	if err := os.WriteFile(filepath.Join(u.dir, "t1.md"), []byte("---\ntype: task\nstatus: doing\nassignee: bob\n---\n# First task\n\nAsk @carol. [[nowhere]]\n\n<!--comment:c1-->Ask<!--/comment:c1-->\n\n<!--comment-thread:c1\n@carol: ok\n-->\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if rec := u.get(t, "", "/me"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous /me = %d", rec.Code)
+	}
+	body := u.get(t, "bob", "/me").Body.String()
+	if !strings.Contains(body, "Tasks assigned to you") || !strings.Contains(body, `<a href="/p/t1.md">First task</a>`) || !strings.Contains(body, "1 open") {
+		t.Fatalf("bob's for-you page:\n%s", body)
+	}
+	if body := u.get(t, "carol", "/me").Body.String(); !strings.Contains(body, "Pages that mention you") || !strings.Contains(body, "First task") || strings.Contains(body, "Tasks assigned to you</h3><div") {
+		t.Fatalf("carol's for-you page:\n%s", body)
+	}
+	// Problems are filtered to readable pages and the hidden ones counted.
+	if err := os.WriteFile(filepath.Join(u.dir, "secret.md"), []byte("---\npermissions:\n  admin: alice\n---\n# Secret\n\n[[gone]]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	body = u.get(t, "", "/problems").Body.String()
+	if !strings.Contains(body, `unresolved &#34;nowhere&#34;`) || strings.Contains(body, "gone") {
+		t.Fatalf("problems page:\n%s", body)
+	}
+	if !strings.Contains(body, "1 report(s) concern pages you may not read") {
+		t.Fatalf("hidden count missing:\n%s", body)
+	}
+	if body := u.get(t, "alice", "/problems").Body.String(); !strings.Contains(body, `unresolved &#34;gone&#34;`) || strings.Contains(body, "you may not read") {
+		t.Fatalf("admin's problems page:\n%s", body)
+	}
+	// Search by title or path; the list and its stream carry the query.
+	body = u.get(t, "", "/?q=FIRST").Body.String()
+	if !strings.Contains(body, "First task") || strings.Contains(body, "Second task") || !strings.Contains(body, `hx-sse:connect="/events?q=FIRST"`) {
+		t.Fatalf("search:\n%s", body)
+	}
+	if body := u.get(t, "", "/pages?q=t2&type=task").Body.String(); !strings.Contains(body, "Second task") || strings.Contains(body, "First task") {
+		t.Fatalf("search by path:\n%s", body)
+	}
+	if body := u.get(t, "", "/").Body.String(); !strings.Contains(body, `jk-comment-count" data-variant="outline" title="unresolved comments">1 open</span>`) {
+		t.Fatalf("comment count missing:\n%s", body)
+	}
+	for name, target := range map[string]string{"new": "/new", "me": "/me", "problems": "/problems", "search": "/?q=task"} {
+		lower := strings.ToLower(u.get(t, "bob", target).Body.String())
+		for _, banned := range []string{"<style", " style=", "javascript:", "hx-on", "hx-live"} {
+			if strings.Contains(lower, banned) {
+				t.Errorf("%s contains %q", name, banned)
+			}
+		}
+		if regexp.MustCompile(`\son[a-z]+=`).MatchString(lower) {
+			t.Errorf("%s has an inline event handler", name)
+		}
+	}
+}
