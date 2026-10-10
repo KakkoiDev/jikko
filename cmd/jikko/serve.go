@@ -213,7 +213,15 @@ type pageData struct {
 	Detail  *detailView
 	Edit    *editView
 	// Online is who is here: running agents and people with a live session.
-	Online []presenceView
+	Online      []presenceView
+	HereSummary string
+	// The viewer, for the header.
+	ActorName, ActorInitials, ActorURL string
+	// Home page only.
+	Needs []needView
+	Cards []cardView
+	// Empty is a workspace with no pages at all: the first-run screen.
+	Empty bool
 }
 
 func serve(args []string) error {
@@ -296,6 +304,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /edit/{path...}", s.editPage)
 	mux.HandleFunc("POST /save/{path...}", s.savePage)
 	mux.HandleFunc("POST /comment/{path...}", s.commentPage)
+	mux.HandleFunc("POST /status/{path...}", s.setStatus)
 	mux.HandleFunc("POST /upload/{path...}", s.uploadFile)
 	mux.HandleFunc("GET /events/page/{path...}", s.pageEvents)
 	mux.HandleFunc("GET /events/activity/{path...}", s.activityEvents)
@@ -393,7 +402,10 @@ func (s *server) data(r *http.Request, extend bool) (pageData, error) {
 		query = "?" + encoded
 	}
 	actor := s.actor(r, ws, extend)
-	return pageData{Pages: visiblePages(ws, actor, ws.List(kind, q.Get("status"))), Query: query, Actor: actor, Online: s.online(ws, actor)}, nil
+	pages := visiblePages(ws, actor, ws.List(kind, q.Get("status")))
+	data := pageData{Pages: pages, Cards: s.cards(ws, pages), Query: query, Actor: actor, Needs: s.needs(ws, actor), Empty: len(ws.Pages) == 0}
+	s.decorate(&data, ws)
+	return data, nil
 }
 
 // render executes a template for the caller and also reports who the caller

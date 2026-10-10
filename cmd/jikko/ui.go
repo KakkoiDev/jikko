@@ -54,7 +54,27 @@ var assetVersions = func() map[string]string {
 	return out
 }()
 
+// decorate fills the parts of pageData every page shows: who is here and who
+// the viewer is.
+func (s *server) decorate(data *pageData, ws *jikko.Workspace) {
+	data.Online = s.online(ws, data.Actor)
+	data.HereSummary = hereSummary(data.Online, data.Actor)
+	if data.Actor != "" {
+		data.ActorName = path.Base(data.Actor)
+		data.ActorInitials = initials(data.Actor)
+		if p, ok := ws.ResolveIdentity(data.Actor); ok {
+			data.ActorName = p.Title
+			data.ActorInitials = initials(p.Title)
+			data.ActorURL = jikko.DefaultLinks.Page(p.Path)
+		}
+	}
+}
+
 var templateFuncs = template.FuncMap{
+	"initials":  initials,
+	"statuses":  func() []string { return statusValues },
+	"statusURL": func(p string) string { return "/status/" + escapedPath(p) },
+	"lower":     strings.ToLower,
 	"asset": func(name string) string {
 		if v, ok := assetVersions[name]; ok {
 			return "/assets/" + name + "?v=" + v
@@ -212,6 +232,15 @@ type detailView struct {
 	// Assignees is set for tasks: who is responsible, with their presence.
 	Assignees []presenceView
 	Status    string
+	Due       string
+	// History is the page's own commits, newest first.
+	History []commitView
+	// Identity pages: whether it is an agent, and the groups it belongs to.
+	IsAgent  bool
+	Initials string
+	Groups   []*jikko.Page
+	// Section names the top-level list the page belongs to, for the crumb.
+	Section, SectionURL string
 }
 
 type notice struct{ Kind, Message string }
@@ -219,11 +248,16 @@ type notice struct{ Kind, Message string }
 type commentView struct {
 	ID, Anchor string
 	Entries    []entryView
+	// Needs is set when the thread mentions the viewer and they spoke last-but-one.
+	Needs bool
 }
 
 type entryView struct {
-	Author string
-	HTML   template.HTML
+	Author   string // as written, e.g. identity/gemma
+	Name     string // display name
+	Kind     string // agent, human, group
+	Initials string
+	HTML     template.HTML
 }
 
 type editView struct {
@@ -277,13 +311,42 @@ func (s *server) detail(ws *jikko.Workspace, actor string, p *jikko.Page) *detai
 	for _, c := range p.Comments {
 		cv := commentView{ID: c.ID, Anchor: c.Anchor}
 		for _, e := range c.Entries {
-			author := e.Author
+			author := strings.TrimPrefix(e.Author, "@")
+			ev := entryView{Author: author, Name: path.Base(author), Kind: "human", Initials: initials(author), HTML: r.Inline(e.Text)}
 			if author == "" {
-				author = "?"
+				ev.Author, ev.Name, ev.Initials = "?", "?", "?"
+			} else if who, ok := ws.ResolveIdentity(author); ok {
+				ev.Name = who.Title
+				ev.Initials = initials(who.Title)
+				ev.Kind = whoKind(ws, strings.TrimSuffix(who.Path, ".md"))
 			}
-			cv.Entries = append(cv.Entries, entryView{Author: author, HTML: r.Inline(e.Text)})
+			if mentionsActor(e.Text, actor) {
+				cv.Needs = true
+			}
+			cv.Entries = append(cv.Entries, ev)
+		}
+		if n := len(c.Entries); n > 0 && actor != "" {
+			last := strings.TrimPrefix(c.Entries[n-1].Author, "@")
+			if last == actor || last == path.Base(actor) {
+				cv.Needs = false
+			}
 		}
 		d.Comments = append(d.Comments, cv)
+	}
+	if entries, err := ws.Log(actor, p.Path, 8); err == nil {
+		for _, c := range entries {
+			d.History = append(d.History, toCommitView(ws, c))
+		}
+	}
+	switch p.Kind {
+	case jikko.Task:
+		d.Section, d.SectionURL = "Tasks", "/?type=task"
+	case jikko.Identity:
+		d.Section, d.SectionURL = "Identities", "/?type=identity"
+	case jikko.View:
+		d.Section, d.SectionURL = "Views", "/?type=view"
+	default:
+		d.Section, d.SectionURL = "Documents", "/?type=document"
 	}
 	for _, b := range p.Backlinks {
 		if q, ok := ws.Pages[b]; ok && ws.Allowed(actor, q, jikko.Read) {
@@ -303,18 +366,24 @@ func (s *server) detail(ws *jikko.Workspace, actor string, p *jikko.Page) *detai
 	switch p.Kind {
 	case jikko.Identity:
 		d.Activity = s.activity(ws, actor, p)
-	case jikko.Task:
-		d.Status = strings.TrimSpace(fmt.Sprint(p.Metadata["status"]))
-		if d.Status == "<nil>" {
-			d.Status = ""
+		ref := strings.TrimSuffix(p.Path, ".md")
+		d.IsAgent = len(p.Members) == 0 && isAgent(ws, ref)
+		d.Initials = initials(p.Title)
+		for _, g := range ws.List(jikko.Identity, "") {
+			if len(g.Members) != 0 && ws.Allowed(actor, g, jikko.Read) && ws.MemberOf(ref, strings.TrimSuffix(g.Path, ".md")) {
+				d.Groups = append(d.Groups, g)
+			}
 		}
+	case jikko.Task:
+		d.Status = strings.ToLower(metaText(p, "status"))
+		d.Due = metaText(p, "due")
 		for _, a := range assignees(p) {
 			who, ok := ws.ResolveIdentity(a)
 			if !ok || !ws.Allowed(actor, who, jikko.Read) {
 				continue
 			}
 			ref := strings.TrimSuffix(who.Path, ".md")
-			row := presenceView{Ref: ref, Name: who.Title, URL: jikko.DefaultLinks.Page(who.Path), Kind: "person", State: "offline"}
+			row := presenceView{Ref: ref, Name: who.Title, URL: jikko.DefaultLinks.Page(who.Path), Initials: initials(who.Title), Kind: whoKind(ws, ref), State: "offline"}
 			if pr, found := ws.PresenceOf(ref); found {
 				row = presenceRow(ws, actor, who, &pr)
 			} else if _, live := s.sessions.active()[ref]; live {
@@ -424,7 +493,7 @@ func isHTMX(r *http.Request) bool { return r.Header.Get("HX-Request") == "true" 
 func (s *server) respond(w http.ResponseWriter, r *http.Request, status int, data pageData) {
 	if data.Online == nil {
 		if ws, err := s.cache.load(); err == nil {
-			data.Online = s.online(ws, data.Actor)
+			s.decorate(&data, ws)
 		}
 	}
 	name := "page"
@@ -520,12 +589,47 @@ func (s *server) mutationContextLimit(w http.ResponseWriter, r *http.Request, li
 		s.fail(w, err)
 		return nil, "", false
 	}
+	ws.AutoCommit = s.cache.autoCommit
 	actor := s.actor(r, ws, true)
 	if actor == "" {
 		s.refuse(w, r, http.StatusUnauthorized, "", msgLogin)
 		return nil, "", false
 	}
 	return ws, actor, true
+}
+
+// setStatus moves a task between todo, doing, blocked, and done from the
+// segmented control on its page.
+func (s *server) setStatus(w http.ResponseWriter, r *http.Request) {
+	ws, actor, ok := s.mutationContext(w, r)
+	if !ok {
+		return
+	}
+	pages, err := ws.ReadMany(actor, r.PathValue("path"))
+	if err != nil {
+		s.refuse(w, r, http.StatusNotFound, actor, msgNotFound)
+		return
+	}
+	p := pages[0]
+	value := strings.ToLower(strings.TrimSpace(r.PostFormValue("status")))
+	valid := false
+	for _, v := range statusValues {
+		valid = valid || v == value
+	}
+	switch {
+	case p.Kind != jikko.Task:
+		s.refuse(w, r, http.StatusBadRequest, actor, "Only a task has a status.")
+	case !valid:
+		s.refuse(w, r, http.StatusBadRequest, actor, "Unknown status.")
+	case !ws.Allowed(actor, p, jikko.Write):
+		s.refuse(w, r, http.StatusForbidden, actor, "You may read this page but not change it.")
+	default:
+		if err := ws.SetMetadata(actor, p.Path, "status", value); err != nil {
+			s.respond(w, r, http.StatusBadRequest, pageData{Actor: actor, CSRF: s.csrfFor(w, r), Error: err.Error(), Detail: s.detail(ws, actor, p)})
+			return
+		}
+		s.done(w, r, ws, actor, p.Path, "Status set to "+value+".")
+	}
 }
 
 // done answers a successful mutation: the refreshed page section for an
