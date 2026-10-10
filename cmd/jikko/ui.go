@@ -370,6 +370,12 @@ func (s *server) mutationContext(w http.ResponseWriter, r *http.Request) (*jikko
 }
 
 func (s *server) mutationContextLimit(w http.ResponseWriter, r *http.Request, limit int64) (*jikko.Workspace, string, bool) {
+	if r.ContentLength > limit {
+		// Say so before the form is parsed: a body cut short by the limit
+		// would otherwise read as a missing anti-forgery token.
+		http.Error(w, fmt.Sprintf("the request is larger than the %d bytes accepted here", limit), http.StatusRequestEntityTooLarge)
+		return nil, "", false
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	if !s.postAllowed(w, r) {
 		return nil, "", false
@@ -407,7 +413,7 @@ func (s *server) savePage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	current, p, err := ws.Source(actor, r.PathValue("path"))
+	_, p, err := ws.Source(actor, r.PathValue("path"))
 	if err != nil {
 		s.refuse(w, r, http.StatusNotFound, actor, msgNotFound)
 		return
@@ -472,16 +478,11 @@ func (s *server) savePage(w http.ResponseWriter, r *http.Request) {
 		flash := "Saved."
 		if res.Merged {
 			flash = "Saved. The page had changed since you opened it; both edits were merged."
-		} else if res.Rev == fingerprintOf(current) {
+		} else if res.Rev == p.Rev {
 			flash = "Nothing to save: the page already reads that way."
 		}
 		s.done(w, r, ws, actor, res.Path, flash)
 	}
-}
-
-func fingerprintOf(b []byte) string {
-	sum := sha256.Sum256(b)
-	return fmt.Sprintf("%x", sum)
 }
 
 // composeFields builds the edited source from the fields form: each

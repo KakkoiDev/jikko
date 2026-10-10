@@ -624,3 +624,59 @@ func TestPageEventsNotifyOnce(t *testing.T) {
 		t.Fatalf("stream = %q", all)
 	}
 }
+
+// Every state-changing route refuses a request without an anti-forgery
+// token and a cross-site request with one, so a route added later cannot
+// quietly skip the check.
+func TestEveryPostNeedsAntiForgeryToken(t *testing.T) {
+	u := uiWorkspace(t)
+	before := u.read(t, "plan.md")
+	own, _ := formToken(t, u.h, []*http.Cookie{u.cookies["bob"]})
+	for _, target := range []string{"/login", "/logout", "/save/plan.md", "/comment/plan.md", "/upload/plan.md"} {
+		send := func(form url.Values, mod func(*http.Request)) int {
+			r := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.AddCookie(u.cookies["bob"])
+			if mod != nil {
+				mod(r)
+			}
+			rec := httptest.NewRecorder()
+			u.h.ServeHTTP(rec, r)
+			return rec.Code
+		}
+		form := url.Values{"token": {u.tokens["bob"]}, "op": {"add"}, "anchor": {"Ship"}, "text": {"forged"}}
+		if code := send(form, nil); code != http.StatusForbidden {
+			t.Errorf("POST %s without a token = %d", target, code)
+		}
+		withToken := cloneValues(form)
+		withToken.Set("_csrf", own)
+		if code := send(withToken, func(r *http.Request) { r.Header.Set("Origin", "https://evil.example") }); code != http.StatusForbidden {
+			t.Errorf("cross-origin POST %s = %d", target, code)
+		}
+	}
+	if u.read(t, "plan.md") != before || len(u.get(t, "bob", "/p/plan.md").Body.String()) == 0 {
+		t.Fatal("a refused request changed the page")
+	}
+	if _, ok := u.s.sessions.lookup(u.cookies["bob"].Value); !ok {
+		t.Fatal("a refused logout ended the session")
+	}
+}
+
+// A body larger than a route accepts is refused as such, before the form is
+// parsed: a cut-off body must not read as a missing token.
+func TestOversizedBodyIsRefusedAsSuch(t *testing.T) {
+	u := uiWorkspace(t)
+	own, _ := formToken(t, u.h, []*http.Cookie{u.cookies["bob"]})
+	r := httptest.NewRequest(http.MethodPost, "/save/plan.md", strings.NewReader("_csrf="+own+"&source="+strings.Repeat("a", maxFormBody)))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.AddCookie(u.cookies["bob"])
+	rec := httptest.NewRecorder()
+	u.h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized save = %d %q", rec.Code, rec.Body.String())
+	}
+	u.s.maxUpload = 16
+	if rec := u.upload(t, "bob", "/upload/plan.md", "big.bin", bytes.Repeat([]byte("x"), maxFormBody+32), false); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized upload = %d", rec.Code)
+	}
+}

@@ -13,3 +13,16 @@ document.addEventListener("selectionchange", function () {
   var field = document.getElementById("jk-anchor");
   if (field && text && text.indexOf("\n") < 0) field.value = text;
 });
+
+// Leaving the page closes its live streams first. The browser would abort
+// their fetches itself a moment later, but htmx then reports the aborted
+// stream as an error on the console; closing them here ends each stream
+// cleanly. The connection record is where the htmx SSE extension keeps it.
+window.addEventListener("pagehide", function () {
+  document.querySelectorAll("[hx-sse\\:connect]").forEach(function (element) {
+    var sse = element._htmx && element._htmx.sse;
+    if (!sse) return;
+    if (sse.abortController && sse.abortController.abort) sse.abortController.abort();
+    if (sse.reader && sse.reader.cancel) sse.reader.cancel();
+  });
+});

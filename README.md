@@ -187,7 +187,7 @@ jikko export --dir /path/to/workspace --output workspace.zip
 
 The ZIP contains source and assets but deliberately excludes Git internals, derived `.data`, and credentials in `.auth.md`. The browser API can produce/download the same ZIP. See [browser/README.md](browser/README.md).
 
-> **Current limitation:** upload progress, drag and drop, and paste; Mermaid diagram rendering (source is shown), live in-place editing of embedded pages, automatic Git commits, and server-sent refresh of an open page are roadmap work.
+> **Current limitation:** upload progress, drag and drop, and paste; Mermaid diagram rendering (source is shown), live in-place editing of embedded pages, and automatic Git commits are roadmap work. An open page or editor is told once when its page changes on disk; it is not refreshed in place.
 
 ## Agent workspace operations
 

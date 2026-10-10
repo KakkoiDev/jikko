@@ -65,8 +65,8 @@ authenticated caller with the capability, and every change goes through the
 same staged, authorized core operations as the CLI.
 
 Every state-changing request (`/login`, `/logout`, `/save/...`,
-`/comment/...`) must be same-origin by Fetch Metadata or `Origin`, and must
-carry an anti-forgery token: an HMAC, under a per-process key, of the
+`/comment/...`, `/upload/...`) must be same-origin by Fetch Metadata or
+`Origin`, and must carry an anti-forgery token: an HMAC, under a per-process key, of the
 session id or, before login, of a random pre-session cookie. Both cookies
 are `HttpOnly` and `SameSite=Strict`. A request authenticated with an
 `Authorization: Bearer` header carries no ambient credential and needs no
