@@ -489,7 +489,7 @@ func (s *server) savePage(w http.ResponseWriter, r *http.Request) {
 		edit := editFor(p, shownMode, yours, base, rev)
 		edit.Error = err.Error()
 		status := http.StatusUnprocessableEntity
-		if strings.Contains(err.Error(), "lacks ") {
+		if jikko.IsPermissionError(err) {
 			status = http.StatusForbidden
 		}
 		s.respond(w, r, status, pageData{Actor: actor, CSRF: s.csrfFor(w, r), Edit: edit})
@@ -590,7 +590,7 @@ func (s *server) commentPage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		status := http.StatusUnprocessableEntity
-		if strings.Contains(err.Error(), "lacks ") {
+		if jikko.IsPermissionError(err) {
 			status = http.StatusForbidden
 		}
 		// The page may have changed; show it as it is now with the error.

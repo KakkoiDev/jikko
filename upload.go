@@ -71,7 +71,7 @@ func (w *Workspace) Upload(actor, name string, data []byte, opt UploadOptions) (
 			return nil, errors.New("views have no body to embed into")
 		}
 		if !cur.Allowed(actor, into, Write) {
-			return nil, fmt.Errorf("%s lacks write permission on %s", actor, into.Path)
+			return nil, &PermissionError{Actor: actor, Need: Write, Path: into.Path}
 		}
 	}
 	dest := opt.Path
@@ -140,7 +140,7 @@ func (w *Workspace) Upload(actor, name string, data []byte, opt UploadOptions) (
 		if now, ok := current.Pages[into.Path]; !ok || now.Rev != into.Rev {
 			return fmt.Errorf("%s changed on disk after it was read; retry", into.Path)
 		} else if !current.Allowed(actor, now, Write) {
-			return fmt.Errorf("%s lacks write permission on %s", actor, into.Path)
+			return &PermissionError{Actor: actor, Need: Write, Path: into.Path}
 		}
 		return nil
 	}, func() error {

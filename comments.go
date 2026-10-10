@@ -394,7 +394,7 @@ func (w *Workspace) commentMutation(actor, ref string, edit func(person, body st
 		return errors.New("views have no body to comment on")
 	}
 	if !w.Allowed(actor, p, Comment) {
-		return fmt.Errorf("%s lacks comment permission on %s", actor, p.Path)
+		return &PermissionError{Actor: actor, Need: Comment, Path: p.Path}
 	}
 	return w.mutateFile(actor, p, Comment, func(raw []byte) ([]byte, error) {
 		_, old, hasFront := splitFrontmatter(raw)

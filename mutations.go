@@ -42,7 +42,7 @@ func (w *Workspace) SetMetadata(actor, ref, key, value string) error {
 		return fmt.Errorf("reference %q not found or ambiguous", ref)
 	}
 	if !w.Allowed(actor, p, Write) {
-		return fmt.Errorf("%s lacks write permission on %s", actor, p.Path)
+		return &PermissionError{Actor: actor, Need: Write, Path: p.Path}
 	}
 	return w.mutate(actor, p, Write, func(m *yaml.Node) error { return setMappingValue(m, key, value) })
 }
@@ -61,7 +61,7 @@ func (w *Workspace) SetPermission(actor, ref, capability string, subjects ...str
 		return fmt.Errorf("unknown capability %q: expected read, comment, write, or admin", capability)
 	}
 	if !w.Allowed(actor, p, Admin) {
-		return fmt.Errorf("%s lacks admin permission on %s", actor, p.Path)
+		return &PermissionError{Actor: actor, Need: Admin, Path: p.Path}
 	}
 	clean := make([]string, 0, len(subjects))
 	for _, s := range subjects {
@@ -118,7 +118,7 @@ func (w *Workspace) mutateFile(actor string, p *Page, need Capability, rewrite f
 		if cur, ok := current.Pages[p.Path]; !ok || cur.Rev != p.Rev {
 			return fmt.Errorf("%s changed on disk after it was read; re-read the workspace and retry", p.Path)
 		} else if !current.Allowed(actor, cur, need) {
-			return fmt.Errorf("%s lacks %s permission on %s", actor, need, p.Path)
+			return &PermissionError{Actor: actor, Need: need, Path: p.Path}
 		}
 		return nil
 	}, func() error { return writeAtomic(target, next) })

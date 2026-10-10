@@ -85,7 +85,7 @@ func (w *Workspace) Rename(actor, ref, to string, opt RenameOptions) (*RenameRes
 		return nil, err
 	}
 	if !cur.Allowed(actor, p, Write) {
-		return nil, fmt.Errorf("%s lacks write permission on %s", actor, p.Path)
+		return nil, &PermissionError{Actor: actor, Need: Write, Path: p.Path}
 	}
 	if _, err := cur.safePath(p); err != nil {
 		return nil, err
@@ -201,7 +201,7 @@ func (w *Workspace) Delete(actor, ref string, opt DeleteOptions) (*DeleteResult,
 		return nil, err
 	}
 	if !cur.Allowed(actor, p, Write) {
-		return nil, fmt.Errorf("%s lacks write permission on %s", actor, p.Path)
+		return nil, &PermissionError{Actor: actor, Need: Write, Path: p.Path}
 	}
 	if _, err := cur.safePath(p); err != nil {
 		return nil, err
