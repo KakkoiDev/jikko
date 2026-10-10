@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // TreeEntry is the deliberately small representation exposed to agents.
@@ -159,6 +160,11 @@ func (w *Workspace) newPagePath(pagePath string) (clean, target string, err erro
 	}
 	if reservedPath(clean) {
 		return "", "", fmt.Errorf("%s is reserved for the harness and is not workspace source", clean)
+	}
+	// A path that [[reference]] syntax cannot spell would leave the page
+	// addressable by no authored reference.
+	if strings.ContainsAny(clean, "[]|") || strings.IndexFunc(clean, unicode.IsControl) >= 0 {
+		return "", "", fmt.Errorf("%q: a page path cannot contain [, ], |, or control characters", clean)
 	}
 	target = filepath.Join(w.Root, filepath.FromSlash(clean))
 	rel, err := filepath.Rel(w.Root, target)

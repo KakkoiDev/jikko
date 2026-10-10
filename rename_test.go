@@ -240,7 +240,7 @@ func TestRenameAuthorization(t *testing.T) {
 	if _, err := w.Rename("ghost", "open", "moved", RenameOptions{}); err == nil {
 		t.Fatal("unauthenticated rename accepted")
 	}
-	for _, bad := range []string{"../escape", "/abs", ".git/x", "readonly", "notes.txt"} {
+	for _, bad := range []string{"../escape", "/abs", ".git/x", "readonly", "notes.txt", "a|b", "a[1]", "a\nb"} {
 		if _, err := w.Rename("alice", "open", bad, RenameOptions{}); err == nil {
 			t.Fatalf("rename to %q accepted", bad)
 		}
@@ -460,5 +460,74 @@ func TestRewriteBodyRefsKeepsMentionsInsideReferences(t *testing.T) {
 	}
 	if took := time.Since(start); took > 10*time.Second {
 		t.Fatalf("rewriting %d references took %v", 200000, took)
+	}
+}
+
+// A rename refused for a page the actor may not read does not name it, in
+// whichever check it fails.
+func TestRenameErrorsDoNotNameHiddenPages(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "bob.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "x.md", "# X\n")
+	writeTest(t, d, "dir/y.md", "# Y\n")
+	writeTest(t, d, "private.md", "---\npermissions:\n  admin: alice\n---\n[[x]]\n")
+	w := openTest(t, d)
+	// Moving x to y leaves no name that resolves to it alone, which is found
+	// while rewriting private.md.
+	_, err := w.Rename("bob", "x", "y", RenameOptions{})
+	if err == nil || !strings.Contains(err.Error(), "unambiguously") || strings.Contains(err.Error(), "private") {
+		t.Fatalf("err = %v", err)
+	}
+	// A hidden page that changes on disk under the rename is not named
+	// either, whether or not the rename has to rewrite it.
+	writeTest(t, d, "secret.md", "---\npermissions:\n  admin: alice\n---\n# Secret\n")
+	w = openTest(t, d)
+	r, err := w.relinker(map[string]string{"dir/y.md": "dir/z.md"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := w.relink("bob", r, "dir/y.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTest(t, d, "secret.md", "---\npermissions:\n  admin: alice\n---\n# Secret, changed\n")
+	if err := plan.unchanged(openTest(t, d)); err == nil || !strings.Contains(err.Error(), "a page you cannot read changed on disk") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("precheck = %v", err)
+	}
+}
+
+// A rename that fails after it has started writing puts every file back:
+// the page under both names, with its references split between them, would
+// otherwise be left for someone to repair by hand.
+func TestRenameRollsBackAFailedMove(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "alice.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "bob.md", "---\ntype: identity\n---\n")
+	writeTest(t, d, "index.md", "# Index\n\n@bob and [[bob]]\n")
+	writeTest(t, d, "task.md", "---\ntype: task\nstatus: todo\nassignee: bob\n---\n# Task\n")
+	// Moving an Identity ends by moving its credentials, which fails when
+	// the credential file cannot be read.
+	writeTest(t, d, ".auth.md", "not a credential file\n")
+	before := snapshotFiles(t, d)
+	w := openTest(t, d)
+	_, err := w.Rename("alice", "bob", "people/robert", RenameOptions{})
+	if err == nil || !strings.Contains(err.Error(), "frontmatter") || strings.Contains(err.Error(), "repair") {
+		t.Fatalf("err = %v", err)
+	}
+	sameFiles(t, before, snapshotFiles(t, d))
+	if _, err := os.Lstat(filepath.Join(d, "people", "robert.md")); !os.IsNotExist(err) {
+		t.Fatal("the moved page was left in place")
+	}
+	// The workspace still works as before: the rename succeeds once the
+	// credential file is readable.
+	if err := os.Remove(filepath.Join(d, ".auth.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openTest(t, d).Rename("alice", "bob", "people/robert", RenameOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, d, "index.md"); got != "# Index\n\n@robert and [[robert]]\n" {
+		t.Fatalf("index.md = %q", got)
 	}
 }

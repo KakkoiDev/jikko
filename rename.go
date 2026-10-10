@@ -132,14 +132,30 @@ func (w *Workspace) Rename(actor, ref, to string, opt RenameOptions) (*RenameRes
 		if err := writeAtomicPerm(target, c.write[clean], mode); err != nil {
 			return err
 		}
-		if err := plan.apply(cur.Root, clean); err != nil {
+		// From here on a failure puts every file back: a rename half done
+		// would leave the page under both names and its references split
+		// between them.
+		undo := func(err error) error {
+			undoErr := plan.undo()
+			if _, statErr := os.Lstat(oldTarget); statErr != nil {
+				undoErr = errors.Join(undoErr, writeAtomicPerm(oldTarget, plan.source[p.Path], mode))
+			}
+			undoErr = errors.Join(undoErr, os.Remove(target))
+			if undoErr != nil {
+				return fmt.Errorf("%w; and rolling the rename back failed, leaving the workspace in need of repair: %w", err, undoErr)
+			}
 			return err
+		}
+		if err := plan.apply(cur.Root, clean); err != nil {
+			return undo(err)
 		}
 		if err := os.Remove(oldTarget); err != nil {
-			return err
+			return undo(err)
 		}
 		if p.Kind == Identity {
-			return moveCredentials(cur.Root, identityRef(p), strings.TrimSuffix(clean, ".md"))
+			if err := moveCredentials(cur.Root, identityRef(p), strings.TrimSuffix(clean, ".md")); err != nil {
+				return undo(err)
+			}
 		}
 		return nil
 	})
@@ -270,21 +286,37 @@ func (w *Workspace) readable(actor, ref string) (*Page, error) {
 // relinkPlan holds the page rewrites a rename or deletion needs.
 type relinkPlan struct {
 	write  map[string][]byte
-	source map[string][]byte
+	source map[string][]byte // the bytes every page in write was read from
 	revs   map[string]string
 	paths  map[string]string // page path -> file path
+	// hidden lists the pages read for the plan that the actor may not read,
+	// so a later message never names one.
+	hidden map[string]bool
+	// written lists the pages apply has rewritten, for undo.
+	written []string
+}
+
+// name describes a page of the plan to the actor.
+func (plan *relinkPlan) name(pagePath string) string {
+	if plan.hidden[pagePath] {
+		return "a page you cannot read"
+	}
+	return pagePath
 }
 
 // relink rewrites every page through r and checks that the actor may make
 // each rewrite. subject is the page being moved, whose own rewrite is
 // covered by write on it and is returned under its old path.
 func (w *Workspace) relink(actor string, r *relinker, subject string) (*relinkPlan, error) {
-	plan := &relinkPlan{write: map[string][]byte{}, source: map[string][]byte{}, revs: map[string]string{}, paths: map[string]string{}}
+	plan := &relinkPlan{write: map[string][]byte{}, source: map[string][]byte{}, revs: map[string]string{}, paths: map[string]string{}, hidden: map[string]bool{}}
 	var denied []string
 	hidden := 0
 	for _, q := range w.sorted() {
 		if r.removed[q.Path] {
 			continue
+		}
+		if !w.Allowed(actor, q, Read) {
+			plan.hidden[q.Path] = true
 		}
 		file := filepath.Join(w.Root, filepath.FromSlash(q.Path))
 		raw, err := os.ReadFile(file)
@@ -292,15 +324,15 @@ func (w *Workspace) relink(actor string, r *relinker, subject string) (*relinkPl
 			return nil, err
 		}
 		if fingerprint(raw) != q.Rev {
-			return nil, fmt.Errorf("%s changed on disk after it was read; retry", q.Path)
+			return nil, fmt.Errorf("%s changed on disk after it was read; retry", plan.name(q.Path))
 		}
 		plan.revs[q.Path] = q.Rev
-		if q.Path == subject {
-			plan.source[q.Path] = raw
-		}
 		next, acl, err := rewriteRefs(raw, r.retarget(q.Path))
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", q.Path, err)
+			return nil, fmt.Errorf("%s: %w", plan.name(q.Path), err)
+		}
+		if q.Path == subject {
+			plan.source[q.Path] = raw
 		}
 		if bytes.Equal(next, raw) {
 			continue
@@ -323,6 +355,7 @@ func (w *Workspace) relink(actor string, r *relinker, subject string) (*relinkPl
 			}
 		}
 		plan.write[q.Path] = next
+		plan.source[q.Path] = raw
 		plan.paths[q.Path] = file
 	}
 	if hidden > 0 {
@@ -340,7 +373,7 @@ func (w *Workspace) relink(actor string, r *relinker, subject string) (*relinkPl
 func (plan *relinkPlan) unchanged(current *Workspace) error {
 	for pagePath, rev := range plan.revs {
 		if p, ok := current.Pages[pagePath]; !ok || p.Rev != rev {
-			return fmt.Errorf("%s changed on disk after it was read; retry", pagePath)
+			return fmt.Errorf("%s changed on disk after it was read; retry", plan.name(pagePath))
 		}
 	}
 	return nil
@@ -359,8 +392,19 @@ func (plan *relinkPlan) apply(root, skip string) error {
 		if err := writeAtomic(file, plan.write[pagePath]); err != nil {
 			return err
 		}
+		plan.written = append(plan.written, pagePath)
 	}
 	return nil
+}
+
+// undo puts back the bytes every page apply rewrote was read from.
+func (plan *relinkPlan) undo() error {
+	var err error
+	for _, pagePath := range plan.written {
+		err = errors.Join(err, writeAtomic(plan.paths[pagePath], plan.source[pagePath]))
+	}
+	plan.written = nil
+	return err
 }
 
 // visibleChanges appends to hidden the changes in pages the actor may not
