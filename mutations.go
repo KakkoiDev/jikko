@@ -102,7 +102,7 @@ func (w *Workspace) mutateFile(actor string, p *Page, need Capability, rewrite f
 	if err != nil {
 		return err
 	}
-	if fingerprint(raw) != p.rev {
+	if fingerprint(raw) != p.Rev {
 		return fmt.Errorf("%s changed on disk after it was read; re-read the workspace and retry", p.Path)
 	}
 	next, err := rewrite(raw)
@@ -112,10 +112,10 @@ func (w *Workspace) mutateFile(actor string, p *Page, need Capability, rewrite f
 	if bytes.Equal(next, raw) {
 		return nil
 	}
-	return w.stage(actor, "mutation", map[string][]byte{p.Path: next}, func(current *Workspace) error {
+	return w.stage(actor, "mutation", writes(map[string][]byte{p.Path: next}), func(current *Workspace) error {
 		// Judge the actor against the workspace as it is now, not as this
 		// Workspace last saw it: a group elsewhere may have changed since.
-		if cur, ok := current.Pages[p.Path]; !ok || cur.rev != p.rev {
+		if cur, ok := current.Pages[p.Path]; !ok || cur.Rev != p.Rev {
 			return fmt.Errorf("%s changed on disk after it was read; re-read the workspace and retry", p.Path)
 		} else if !current.Allowed(actor, cur, need) {
 			return fmt.Errorf("%s lacks %s permission on %s", actor, need, p.Path)
@@ -124,11 +124,35 @@ func (w *Workspace) mutateFile(actor string, p *Page, need Capability, rewrite f
 	}, func() error { return writeAtomic(target, next) })
 }
 
-// stage judges a proposed change and applies it only if it passes. overlay
-// holds the new bytes of every file the change writes, keyed by
-// workspace-relative path. precheck runs against the current workspace;
-// write puts the overlay on disk. The caller holds w.lock.
-func (w *Workspace) stage(actor, what string, overlay map[string][]byte, precheck func(current *Workspace) error, write func() error) error {
+// change is a proposed edit of the workspace: files written, files removed,
+// and pages moved. Paths are workspace-relative and slash-separated.
+type change struct {
+	// write holds the new bytes of every file the change writes.
+	write map[string][]byte
+	// remove lists files the change deletes.
+	remove map[string]bool
+	// moved maps the new path of a moved page to its old path. A moved page
+	// is the same page: it keeps its grants and its administrators, and an
+	// identity keeps its own grants under its new name.
+	moved map[string]string
+}
+
+// writes is a change that only writes files.
+func writes(overlay map[string][]byte) change { return change{write: overlay} }
+
+// back maps a path of the proposed workspace to the path the same page has
+// now. Pages that do not move keep their path.
+func (c change) back(pagePath string) string {
+	if old, ok := c.moved[pagePath]; ok {
+		return old
+	}
+	return pagePath
+}
+
+// stage judges a proposed change and applies it only if it passes. precheck
+// runs against the current workspace; write puts the change on disk. The
+// caller holds w.lock.
+func (w *Workspace) stage(actor, what string, c change, precheck func(current *Workspace) error, write func() error) error {
 	current, err := Open(w.Root)
 	if err != nil {
 		return err
@@ -138,21 +162,28 @@ func (w *Workspace) stage(actor, what string, overlay map[string][]byte, prechec
 			return err
 		}
 	}
-	proposed, err := openOverlay(w.Root, overlay)
+	proposed, err := openOverlay(w.Root, c.write, c.remove)
 	if err != nil {
 		return fmt.Errorf("%s rejected: %w", what, err)
 	}
-	before := current.snapshot()
+	before := current.snapshot(nil)
 	adminBefore := func(pagePath string) bool {
-		if _, created := current.Pages[pagePath]; !created {
+		if _, exists := current.Pages[pagePath]; !exists {
 			// The creator administers the page it creates.
-			if _, inOverlay := overlay[pagePath]; inOverlay {
+			if _, inOverlay := c.write[pagePath]; inOverlay {
 				return true
 			}
 		}
 		return before.admins[pagePath][actor]
 	}
-	if err := before.diff(proposed.snapshot(), adminBefore); err != nil {
+	gone := map[string]bool{}
+	for pagePath := range c.remove {
+		gone[pagePath] = true
+	}
+	for _, old := range c.moved {
+		delete(gone, old)
+	}
+	if err := before.diff(proposed.snapshot(c.back), adminBefore, gone); err != nil {
 		return fmt.Errorf("%s rejected: %w", what, err)
 	}
 	if err := write(); err != nil {
@@ -451,7 +482,14 @@ type snapshot struct {
 	admins     map[string]map[string]bool
 }
 
-func (w *Workspace) snapshot() snapshot {
+// snapshot records the workspace's authorization. back, when not nil, maps
+// each page path to the path the same page has in the workspace it is
+// compared with, so a moved page or a renamed identity is compared with
+// itself rather than read as a new grant.
+func (w *Workspace) snapshot(back func(string) string) snapshot {
+	if back == nil {
+		back = func(pagePath string) string { return pagePath }
+	}
 	s := snapshot{
 		problems:   map[string]bool{},
 		restricted: map[string]bool{},
@@ -459,21 +497,24 @@ func (w *Workspace) snapshot() snapshot {
 		admins:     map[string]map[string]bool{},
 	}
 	for _, p := range w.Problems {
+		p.Path = back(p.Path)
 		s.problems[p.Error()] = true
 	}
 	individuals := w.individuals()
 	for _, p := range w.sorted() {
-		s.restricted[p.Path] = p.Restricted
-		s.admins[p.Path] = map[string]bool{}
+		pagePath := back(p.Path)
+		s.restricted[pagePath] = p.Restricted
+		s.admins[pagePath] = map[string]bool{}
 		for _, a := range individuals {
 			actor := strings.TrimSuffix(a.Path, ".md")
+			name := strings.TrimSuffix(back(a.Path), ".md")
 			for c := Admin; c >= Read; c-- {
 				if !w.Allowed(actor, p, c) {
 					continue
 				}
-				s.grants[actor+"\x00"+p.Path] = c
+				s.grants[name+"\x00"+pagePath] = c
 				if c == Admin {
-					s.admins[p.Path][actor] = true
+					s.admins[pagePath][name] = true
 				}
 				break
 			}
@@ -484,8 +525,9 @@ func (w *Workspace) snapshot() snapshot {
 
 // diff rejects a proposed workspace that introduces a defect, widens anyone's
 // access beyond what the actor may administer, or strips a restricted file of
-// its last administrator.
-func (before snapshot) diff(after snapshot, adminBefore func(pagePath string) bool) error {
+// its last administrator. gone lists pages the change deletes: deleting a
+// file is a write, not a change of its access policy.
+func (before snapshot) diff(after snapshot, adminBefore func(pagePath string) bool, gone map[string]bool) error {
 	for _, pagePath := range sortedKeys(before.admins) {
 		if len(before.admins[pagePath]) > 0 && after.restricted[pagePath] && len(after.admins[pagePath]) == 0 {
 			return fmt.Errorf("it would leave %s with no identity able to administer it; grant admin first", pagePath)
@@ -506,7 +548,7 @@ func (before snapshot) diff(after snapshot, adminBefore func(pagePath string) bo
 		}
 	}
 	for _, pagePath := range sortedKeys(before.restricted) {
-		if before.restricted[pagePath] && !after.restricted[pagePath] && !adminBefore(pagePath) {
+		if before.restricted[pagePath] && !after.restricted[pagePath] && !gone[pagePath] && !adminBefore(pagePath) {
 			return fmt.Errorf("it would remove the access policy of %s, which you may not administer", pagePath)
 		}
 	}

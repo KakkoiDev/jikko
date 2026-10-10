@@ -50,6 +50,34 @@ This model does not introduce Claim, Checkpoint, Evidence, Decision, Event, Mess
 
 The harness MUST expose semantic operations and validation that preserve this model. It MUST keep comments attached to their context, preserve actor attribution, make task state and responsibility queryable, validate resolvable proof references where possible, and surface unmet configured completion requirements. Enforcement MAY be a warning when hard rejection would make ordinary Markdown unusable, but it MUST be deterministic and available to both browser and machine interfaces.
 
+## 2.2 Work-model fields (reference harness reading)
+
+The reference harness reads a few Task properties as references so the work model can be checked without new primitives. They are ordinary metadata: any harness may ignore them, and a Document carrying them is not checked.
+
+```md
+---
+type: task
+status: done
+assignee: alice
+depends_on: [schema-migration]
+blocked_by: "[[vendor-contract]]"
+proof:
+  - "[[load-test-results]]"
+  - screenshots/dashboard.png
+  - https://ci.example.com/runs/812
+  - commit:1a2b3c4d
+requires: [proof, review]
+---
+```
+
+- `assignee` names one or more Identities (responsibility).
+- `depends_on` names Tasks that must be done first.
+- `blocked_by` names pages, usually Tasks, that block this one.
+- `proof` names evidence: a page, a workspace file, a URL, or `commit:<id>`.
+- `requires` lists completion requirements: `assignee`, `proof`, and `review` (no unresolved comments).
+
+A reference may be bare or wrapped as `"[[target]]"`. `jikko check` reports, as failing reference problems, an assignee that is not an Identity, a dependency that is not a Task, an unresolved blocker or proof, a `commit:` proof that names no commit of the workspace's Git history (when there is one to ask), and an unknown requirement. It reports, as warnings that never fail the check or refuse a change, a Task that is `doing` with no assignee and a Task that is `done` while a dependency or blocking Task is not, or while one of its requirements is unmet. `jikko set` prints the warnings for the page it changed. Rename rewrites these references like links (§7.1).
+
 ## 3. Fundamental file semantics
 
 Every Jikko source object is a Markdown file with optional YAML frontmatter and a Markdown body.
@@ -109,6 +137,16 @@ view:
 ```
 
 A View MUST NOT use its body for arbitrary narrative content or stored query results. Narrative composition belongs in a Document.
+
+#### 3.3.1 Reference harness reading
+
+`jikko view <reference> [--json]` evaluates a View over the pages the caller may read; the View itself must be readable. Where this section leaves room the harness reads a View as follows:
+
+- **`filter`** is a mapping of property to a value or a list of values. A page matches when, for every property, any of its values equals any listed value. `type` matches the page's type, with `document` matching untyped pages; `title` and `path` match the page's own; any other key matches frontmatter, where a list such as `tags` holds several values. Values compare as written text (a date as `2026-09-20`), and two references to the same page also match, so `assignee: alice` selects a Task assigned to `people/alice`. A View with no `filter` selects every readable page but itself.
+- **`view.sort`** is a property or a list of them, each optionally prefixed `-` for descending. Numbers compare numerically, dates chronologically, anything else as text; pages without the property come last; ties fall back to the path.
+- **`view.group`** is one property. A page with a list value appears in each of its groups. Values the `filter` lists for that property come first, in the filter's order and even when empty, so a board keeps its columns; other values follow in sort order, and pages without the property come last.
+- **`view.layout`** and other keys under `view` are presentation hints. The harness keeps unknown hints and does not validate their values.
+- **Validation.** A `filter` that is not a mapping, a filter value that is a mapping, an empty value list, an unknown `type`, a `view` that is not a mapping, and a `group` or `sort` of the wrong shape are workspace problems, so a mutation cannot introduce one.
 
 ### 3.4 Identity
 
@@ -195,6 +233,18 @@ A no-rewrite/filesystem-only mode MAY exist, but MUST warn which known reference
 External renames cannot always be inferred safely. `jikko check` MUST report broken references rather than guess.
 
 Backlinks remain derived data.
+
+### 7.1 Reference harness reading
+
+The reference harness implements rename and deletion as `jikko rename <reference> <new path> [--no-rewrite]` and `jikko delete <reference> [--prune]`. Where this section leaves room it takes the simplest safe reading:
+
+- **What is a reference.** `[[links]]` and `![[embeds]]` in prose (never in code), `@mentions` and comment attributions, and the reference-valued frontmatter keys: `members`, `assignee`, the subjects of `permissions`, and the work-model keys `depends_on`, `blocked_by`, and `proof` (§2.2).
+- **Same target afterwards.** A rename rewrites every reference that resolved before so that it resolves to the same page or file afterwards. That includes references to *other* pages that the move would make ambiguous, which are rewritten to their full path, and relative asset embeds in the moved page, which are rewritten from the workspace root. A rewritten reference keeps its style: a bare name stays bare when the new bare name is unambiguous, a `.md` suffix and an `|alias` are kept. A rename that would leave some page addressable by no reference at all is refused.
+- **Meaning changes are reported.** A reference that resolved to nothing and would start resolving is reported as captured. With `--no-rewrite`, references that would stop resolving are reported as broken.
+- **Authority.** A rename needs `write` on the page. Rewriting a reference in another page is an edit of that page and needs `write` on it, and `admin` where its `permissions` change. A rename that cannot make every rewrite is refused as a whole, naming the readable pages in the way and counting the unreadable ones, rather than half done. A no-rewrite rename is still refused if it would break a membership or an access policy.
+- **Identity credentials follow a renamed Identity,** so its tokens keep working and a new Identity given the old name cannot claim them. Browser sessions bound to the old name end. Credentials of a deleted Identity are revoked.
+- **Deletion** needs `write`. It is refused while the page has unresolved comments, and, for an Identity named by `members` or `permissions`, unless `--prune` removes those entries; pruning is judged like any other change of membership or policy. Links, embeds, assignees, and mentions of a deleted page are left in place and reported as broken.
+- **Only Markdown pages** are renamed or deleted this way; assets are ordinary files.
 
 ## 8. Inline comments and review
 
@@ -324,6 +374,16 @@ Git should provide the mature three-way merge machinery where practical; Jikko p
 
 SSE may notify open browser sessions when a source file changes externally, reducing avoidable conflicting saves.
 
+### 11.1 Reference harness reading
+
+- **Revisions.** A page's revision is the SHA-256 of its exact bytes, exposed as `rev` by `jikko show --json` (and on stderr by `jikko show --raw`, which prints the exact source). `jikko save <reference> --rev <rev>` saves an edited source against the revision it was based on; the browser editor does the same.
+- **Finding the base.** When the page has changed since `rev`, the harness needs the base text. It uses, in order, a copy of the source as read that the caller sends with the edit (`--base`, or the browser form) and that is accepted only if its fingerprint is `rev`, then the page's Git history: the index and the last 200 commits that touched the file. A base found neither way means no three-way merge, as §10 anticipates for workspaces without Git: every difference from the current page is reported as a conflict, marked `base_known: false`.
+- **Merging.** Frontmatter merges per key: a key changed by one side takes that side's value (a deletion included), a key changed identically by both takes it once, and a key changed differently by both is a field conflict. The body merges per line with the diff3 rule: a region changed by one side takes that side, and a region changed differently by both, adjacent lines included, conflicts. The current page's frontmatter bytes are kept unless a key changes. Frontmatter that cannot be read as a mapping is merged as part of the text.
+- **Merge machinery.** §10 prefers Git's merge machinery. The reference harness takes the base from Git but performs the diff3 merge itself, in the Go core, because the browser runtime has no Git process and the specification asks for enforcement that is deterministic and identical for browser and machine interfaces (§2.1). The algorithm is the standard diff3 rule over a longest-common-subsequence line match, not a new one; for very large changed regions the match is skipped, which can only turn a merge into a conflict.
+- **Results.** A clean merge is saved like any other edit, staged and authorized, and is reported as `merged`; recording it in Git remains `jikko commit`. A conflict writes nothing and returns, as JSON, the path, both revisions, whether the base was known, each conflicting key with its base, current, and yours values (YAML text, `null` when absent), and each conflicting body region with the line where it starts in the current body. Raw conflict markers are never written. Changing `permissions` in an edit needs `admin`.
+- **Settling a conflict.** Each conflict has an id, `field:<key>` or `body:<n>` counting body regions from 0. Saving the same edit again with resolutions -- each id settled as `current` or `yours` (`jikko save --resolve body:0=yours --against <current rev>`, or the browser's per-conflict choice) -- produces the merge with those sides taken. Ids describe the page as it was when the conflict was reported, so resolutions apply only while the page is still at that revision; otherwise the conflicts are reported afresh. A conflict left unsettled is reported again.
+- **Line endings.** An edit is converted to the line endings of the current file, since browsers submit text with CRLF.
+
 ## 12. Uploads and asset size
 
 Uploads are ordinary workspace files and, by default, participate in Git history. Browser upload entry points include drag/drop, clipboard paste, `+` insertion, and accessible file picker. Show real byte progress when available and an indeterminate state otherwise.
@@ -336,6 +396,10 @@ jikko upload ./diagram.png --into architecture.md --json
 ```
 
 The reference harness MUST impose a configurable maximum upload size to avoid accidentally placing impractically large binary files into ordinary Git history. The initial limit should be chosen from testing rather than premature optimization.
+
+### 12.1 Reference harness reading
+
+`jikko upload <file> [--into <page>] [--as <path>]` and the browser's file picker on a page perform the same core operation. The file becomes an ordinary workspace file, by default named as uploaded and placed next to the page it is embedded into, or at the root. With a page, `![[file]]` is appended to its body as a paragraph of its own in the same staged operation, which needs `write` on the page; a bare name is used when nothing else answers to it, the path otherwise. Without a page, an authenticated individual may upload. An existing file is never overwritten, and Markdown pages, dotfiles, harness state, paths outside the workspace, and names containing `[`, `]`, or `|` are refused. The maximum upload size defaults to 25 MiB -- well under the 50 MB at which GitHub warns and the 100 MB at which it refuses a file -- and is configured with `--max-upload` or `JIKKO_MAX_UPLOAD` (for example `10M`), for `jikko upload` and `jikko serve` alike. Upload progress, drag and drop, paste, and `+` insertion are not implemented yet.
 
 **Open design question:** large binary asset storage. Git LFS or another local/remote large-file mechanism may eventually be useful, but it is deliberately not a v1 dependency. Any future design must consider local hosting, portability, deletion/garbage collection, and the complexity of introducing a second storage system.
 
@@ -370,6 +434,10 @@ Folders organize files but carry no Jikko semantics. Meaning comes from content 
 ## 16. Rendering safety
 
 A rendering harness MUST detect recursive embed cycles and stop expansion safely.
+
+### 16.1 Reference harness reading
+
+The reference harness renders Markdown with its own small renderer in the Go core, safe by construction: every character of source is escaped and the only elements in the output are those the renderer writes. Raw HTML in a page is shown as text, never passed through; the specification nowhere asks for HTML passthrough. Links take only `http`, `https`, `mailto`, and same-site targets. `[[links]]` and `![[embeds]]` render as links or expansions only for pages the reader may read; an embed of a forbidden page renders exactly like a missing one. Embedded Markdown expands inside a bordered container, an embed of a page already being expanded stops with a visible note, and nesting stops at five levels. Images, video, and audio embed natively and other files as a download card. A workspace file is served only to a reader of some page that links or embeds it (or cites it as `proof`), and never when it is harness state, a symbolic link, or a dotfile. Mermaid source is shown as source; no diagram script runs. Comment anchors render as highlights linked to their thread, and threads are left out of the body for a sidebar.
 
 ## 17. Non-goals for v1
 

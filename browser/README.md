@@ -56,12 +56,23 @@ Branch meaning is deliberately outside Jikko. A caller may use branches for rele
 
 The Go/WASM API mirrors the permission-aware native runtime:
 
-- `tree(handle, actor)`
-- `read(handle, actor, ref)`
-- `readMany(handle, actor, refs)`
-- `mentions(handle, actor)`
+- `loadOPFS(root, {identity})` / `JikkoWASM.open(files, {identity})`
+- `tree(handle)`
+- `read(handle, ref)`
+- `readMany(handle, refs)`
+- `mentions(handle)`
+- `view(handle, ref)` -- evaluate a View
+- `render(handle, ref)` -- the page's Markdown as safe HTML, from the same renderer as the native server
+- `check(handle)` -- problems, unresolved references, and warnings, as `jikko check --json`
+- `identity(handle)` -- `{mode: "local", identity}`
 - `exportWorkspaceZIP(handle)`
 - `downloadWorkspaceZIP(handle, filename)`
+
+### Single-user local mode
+
+The browser runtime has no authentication of its own. Every byte of the workspace, `.git/` included, lives in the device owner's browser storage, and whoever controls that storage can change any file, exactly as direct filesystem access bypasses Jikko permissions on a native workspace (`SECURITY.md`). A token check inside the same storage would protect nothing.
+
+So the runtime runs in the single-user local mode the permission semantics allow. The host application, which owns authentication, binds one individual Identity when it opens the workspace; the Go core refuses an unknown Identity or a group, and every call then acts as that Identity -- permission filtering, mentions, views, and the `Jikko-Actor` trailer of browser commits. A call cannot name a different actor. Without an identity the runtime acts anonymously and sees only open pages, and browser commits are refused. `.auth.md` is never loaded into the browser.
 
 OPFS owns durable browser bytes. Go/WASM owns Jikko parsing, references, permissions and navigation. isomorphic-git owns Git semantics. HTMX owns the UI interaction contract.
 

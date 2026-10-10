@@ -132,7 +132,7 @@ jikko comment resolve design c17
 jikko comment list [design] --json
 ```
 
-`jikko check` warns about a Task marked done while comments remain unresolved. See specification §8.1 for the details of the serialization.
+`jikko check` warns about a Task marked done while comments remain unresolved, while its `depends_on` Tasks are unfinished, or while its `requires` (proof, assignee, review) are unmet. Record evidence in `proof:` (pages, files, URLs, `commit:<id>`); `check` validates it. Use `jikko view <view> --json` to read tracked work the way a View defines it. See specification §8.1 for the details of the serialization.
 
 ## Go harness and mutations
 
@@ -146,11 +146,11 @@ Prefer semantic operations and deterministic `--json`. Direct Markdown edits rem
 
 A mutation should carry authenticated actor context. Do not automatically write `updated_by` into documents. Audit attribution belongs in Git/history unless identity is part of authored meaning.
 
-Rename through Jikko should update safely resolvable `[[links]]` and `![[embeds]]`. Uploads are ordinary workspace files and should use the same core operation from browser and CLI. Respect the configured maximum upload size.
+Rename and delete through Jikko (`jikko rename`, `jikko delete`), never with `mv` or `rm`: rename rewrites safely resolvable `[[links]]`, `![[embeds]]`, memberships, policies, assignees, and mentions, and delete refuses to silently drop an identity that a group or policy names. Uploads are ordinary workspace files and use the same core operation from browser and CLI: `jikko upload <file> --into <page>` stores the file and embeds it in one step. Respect the configured maximum upload size.
 
 ## Concurrency
 
-Use optimistic revision checks. If source changed after read, use a three-way merge where clean; otherwise return a structured conflict. Do not blindly overwrite another actor's edit. Do not add CRDT/OT infrastructure without demonstrated need.
+Use optimistic revision checks. If source changed after read, use a three-way merge where clean; otherwise return a structured conflict. For a whole-page edit, read with `jikko show <page> --raw` (the rev is printed on stderr, or use `show --json`), keep the original as the base, and write back with `jikko save <page> --rev <rev> --file edited.md --base original.md --json`. On a conflict, nothing is written: re-read, reconcile the listed fields and regions, and save again against the new rev. Do not blindly overwrite another actor's edit. Do not add CRDT/OT infrastructure without demonstrated need.
 
 ## Browser rules
 

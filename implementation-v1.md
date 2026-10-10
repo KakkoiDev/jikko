@@ -19,7 +19,11 @@ Implemented in the Go core:
 - optimistic concurrency, atomic writes, and symlink containment for mutations;
 - staged mutations: the proposed workspace is built in memory and judged before anything is written, so a rejected mutation never touches disk;
 - per-workspace serialization of mutations and credential changes within a process;
-- surgical frontmatter edits that preserve key order, comments, and YAML types.
+- surgical frontmatter edits that preserve key order, comments, and YAML types;
+- a browser interface with page detail, fields and source editing against a revision, side-by-side conflict resolution, and comment add/reply/resolve, protected by anti-forgery tokens and a strict CSP, over a Markdown renderer that never passes raw HTML through (specification §16.1);
+- uploads with a configurable maximum size, embedded into a page in the same operation, from the CLI and the browser (specification §12.1);
+- three-way merge of stale edits with structured, per-key and per-region conflicts (`jikko save`, specification §11.1);
+- semantic rename that rewrites links, embeds, memberships, access policies, assignees, mentions, and work-model references in one staged operation, and deletion that refuses or explicitly prunes inbound membership and policy references (specification §7.1).
 
 `CanChangeMembers` remains the conservative pre-check it always was: changing a group that participates in ACLs requires effective `admin` on every affected file.
 
@@ -40,8 +44,9 @@ The next runtime layer must enforce the documented work model without adding pag
 - deterministic validation available to CLI/JSON and browser;
 - structured Task mutations for status, responsibility, dependencies, blockers, and progress;
 - semantic comment/reply/resolve operations for durable discussion (implemented: `jikko comment`, specification §8.1);
-- proof references through ordinary links, embeds, commits, tests, measurements, files, external references, or approval;
-- warnings or rejection for completion when configured requirements remain unmet;
+- proof references through ordinary links, embeds, commits, tests, measurements, files, external references, or approval (implemented: `assignee`, `depends_on`, `blocked_by`, `proof`, validated by `jikko check`, specification §2.2);
+- warnings or rejection for completion when configured requirements remain unmet (implemented as warnings through a Task's `requires`);
+- views evaluated over readable pages with filter, sort, and grouping (implemented: `jikko view`, specification §3.3.1);
 - actor-attributed logical mutations and Git-backed audit history;
 - onboarding and agent guidance that make Jikko the authoritative workspace.
 

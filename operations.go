@@ -1,7 +1,6 @@
 package jikko
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -51,29 +50,7 @@ func (w *Workspace) ReplaceBody(actor, ref, body string) error {
 	if !w.Allowed(actor, p, Write) {
 		return fmt.Errorf("%s lacks write on %s", actor, p.Path)
 	}
-	return w.mutateFile(actor, p, Write, func(raw []byte) ([]byte, error) {
-		_, old, hasFront := splitFrontmatter(raw)
-		if !hasFront {
-			if opensFrontmatter(raw) {
-				return nil, errors.New(`frontmatter opens with "---" but has no closing "---" line; fix the file before mutating it`)
-			}
-			// A byte order mark in front of the fence still opens frontmatter.
-			if strings.HasPrefix(strings.TrimPrefix(body, "\ufeff"), "---") {
-				return nil, errors.New(`body must not open with a "---" frontmatter fence; use set or perm to change metadata`)
-			}
-			return []byte(body), nil
-		}
-		next := append([]byte(nil), raw[:len(raw)-len(old)]...)
-		// A closing fence at end of file has no line break; without one the
-		// body would be glued onto the fence and the frontmatter lost.
-		if !bytes.HasSuffix(next, []byte("\n")) && body != "" {
-			if usesCRLF(next) {
-				next = append(next, '\r')
-			}
-			next = append(next, '\n')
-		}
-		return append(next, body...), nil
-	})
+	return w.mutateFile(actor, p, Write, func(raw []byte) ([]byte, error) { return replaceBody(raw, body) })
 }
 
 func (w *Workspace) ReplaceBodyWithToken(token, ref, body string) error {

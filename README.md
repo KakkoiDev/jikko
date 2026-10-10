@@ -19,6 +19,12 @@ go run ./cmd/jikko serve --dir /path/to/workspace
 ```
 
 Open the address printed by `serve` (currently `http://127.0.0.1:8080` by default).
+Log in with a token from `jikko auth create` to edit: every page has a detail
+view with its rendered Markdown, properties, backlinks, and a discussion
+sidebar, and those who may change it get a fields-and-body editor, a raw source
+editor, and comment, reply, and resolve forms. A save made against an old
+revision is merged with the concurrent change or shown as a side-by-side
+conflict to settle. Views render as boards, tables, or lists.
 It binds to localhost and has no transport security of its own; put it behind a
 TLS-terminating reverse proxy and pass `--behind-proxy` to reach it from
 elsewhere.
@@ -78,6 +84,30 @@ go run ./cmd/jikko show --dir /path/to/workspace session-design --json
 go run ./cmd/jikko check --dir /path/to/workspace
 ```
 
+A view is a saved query. `jikko view` evaluates it over the pages you may read:
+
+```md
+---
+type: view
+filter:
+  type: task
+  status: [todo, doing]
+view:
+  layout: board
+  group: status
+  sort: due
+---
+```
+
+```sh
+go run ./cmd/jikko view open-work --dir /path/to/workspace --json
+```
+
+Tasks can also name their responsibility, dependencies, and evidence with
+`assignee`, `depends_on`, `blocked_by`, `proof`, and `requires`; `check`
+validates those references and warns when a Task is done before its
+dependencies or without what it requires (see specification §2.2).
+
 `--json` is intended for agents/scripts. Markdown remains source of truth regardless of whether a human, browser, or agent edits it.
 
 Authenticated callers can make structured edits. A metadata mutation rewrites
@@ -96,8 +126,44 @@ a change is rejected if it introduces a workspace problem, widens anyone's
 access beyond what you may administer, or leaves a restricted file with no
 administrator.
 
+Pages are renamed and deleted through Jikko so references stay intact:
+
+```sh
+go run ./cmd/jikko rename session-design architecture/sessions --dir /path/to/workspace
+go run ./cmd/jikko rename session-design old --no-rewrite --dir /path/to/workspace
+go run ./cmd/jikko delete old-notes --dir /path/to/workspace
+go run ./cmd/jikko delete former-member --prune --dir /path/to/workspace
+```
+
+`rename` rewrites every `[[link]]`, `![[embed]]`, and, for an identity, every
+group membership, access policy, assignee, and `@mention` that pointed at the
+page, and reports references whose meaning changes. `--no-rewrite` only moves
+the file and lists what breaks. `delete` refuses to drop an identity that a
+group or an access policy names unless `--prune` removes those entries, and
+reports links it leaves dangling.
+
+Files are uploaded through the same operation from the CLI and the browser,
+up to a configurable maximum size (25 MiB by default):
+
+```sh
+go run ./cmd/jikko upload ./diagram.png --into architecture --dir /path/to/workspace
+go run ./cmd/jikko upload ./recording.mp4 --as media/demo.mp4 --max-upload 50M --dir /path/to/workspace
+```
+
+Whole-page edits carry the revision they were based on. When the page changed
+meanwhile, Jikko merges the two edits three ways -- frontmatter key by key, the
+body line by line -- using the base revision you send or finds in Git history,
+and returns a structured conflict instead of overwriting when they overlap:
+
+```sh
+go run ./cmd/jikko show plan --raw --dir /path/to/workspace > plan.md   # prints the rev on stderr
+cp plan.md plan.base.md && $EDITOR plan.md
+go run ./cmd/jikko save plan --rev <rev> --file plan.md --base plan.base.md --json --dir /path/to/workspace
+```
+
 `check` reports unresolved references together with workspace problems —
-malformed frontmatter, unknown types, views carrying a body, membership cycles,
+malformed frontmatter, unknown types, views carrying a body or an unusable
+definition, broken work-model references, membership cycles,
 and access policies naming identities that do not resolve. A problem is
 reported rather than fatal, so one bad file never makes the rest of a workspace
 unreadable, but a file whose access policy cannot be evaluated is denied to
@@ -111,7 +177,7 @@ Jikko's Go core is also a browser target:
 GOOS=js GOARCH=wasm go build -o jikko.wasm ./cmd/jikko-wasm
 ```
 
-The browser adapter exposes the same permission-aware navigation/read semantics (`tree`, `read`, `readMany`, `mentions`) while OPFS supplies durable browser storage. Browser storage is an adapter concern; Markdown remains the workspace model.
+The browser adapter exposes the same permission-aware semantics (`tree`, `read`, `readMany`, `mentions`, `view`, `render`, `check`) while OPFS supplies durable browser storage. It runs in single-user local mode: the host application binds the identity it vouches for when it opens the workspace. Browser storage is an adapter concern; Markdown remains the workspace model.
 
 Portable export is first-class in the core and CLI:
 
@@ -121,7 +187,7 @@ jikko export --dir /path/to/workspace --output workspace.zip
 
 The ZIP contains source and assets but deliberately excludes Git internals, derived `.data`, and credentials in `.auth.md`. The browser API can produce/download the same ZIP. See [browser/README.md](browser/README.md).
 
-> **Current limitation:** the implementation can inspect, mutate, comment on, and serve a workspace, but the source-first browser editor, browser comment sidebar, automatic Git transaction/merge integration, uploads, media embeds, Mermaid, and semantic rename are roadmap work.
+> **Current limitation:** upload progress, drag and drop, and paste; Mermaid diagram rendering (source is shown), live in-place editing of embedded pages, and automatic Git commits are roadmap work. An open page or editor is told once when its page changes on disk; it is not refreshed in place.
 
 ## Agent workspace operations
 

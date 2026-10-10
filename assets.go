@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -68,25 +69,31 @@ func (idx assetIndex) resolve(from, ref string) (string, bool, bool) {
 }
 
 // UnresolvedReferences reports every [[link]] and ![[embed]] that names
-// neither a page nor a file of the workspace.
+// neither a page nor a file of the workspace, and every work-model reference
+// of a Task that does not resolve to what its field requires (specification
+// §2.2).
 func (w *Workspace) UnresolvedReferences() ([]Problem, error) {
 	var idx *assetIndex
+	var idxErr error
+	resolveFile := func(from, ref string) (bool, bool) {
+		if idx == nil && idxErr == nil {
+			built, err := w.assets()
+			idx, idxErr = &built, err
+		}
+		if idxErr != nil {
+			return false, false
+		}
+		_, ok, ambiguous := idx.resolve(from, ref)
+		return ok, ambiguous
+	}
 	var out []Problem
 	for _, p := range w.sorted() {
 		for _, ref := range append(append([]string{}, p.Links...), p.Embeds...) {
 			if _, ok := w.Resolve(ref); ok {
 				continue
 			}
-			ext := strings.ToLower(path.Ext(ref))
-			if ext != "" && ext != ".md" {
-				if idx == nil {
-					built, err := w.assets()
-					if err != nil {
-						return nil, err
-					}
-					idx = &built
-				}
-				_, ok, ambiguous := idx.resolve(p.Path, ref)
+			if isAssetRef(ref) {
+				ok, ambiguous := resolveFile(p.Path, ref)
 				if ok {
 					continue
 				}
@@ -98,5 +105,48 @@ func (w *Workspace) UnresolvedReferences() ([]Problem, error) {
 			out = append(out, Problem{Path: p.Path, Kind: ProblemReference, Message: fmt.Sprintf("unresolved %q", ref)})
 		}
 	}
+	out = append(out, w.workReferenceProblems(resolveFile)...)
+	if idxErr != nil {
+		return nil, idxErr
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
+}
+
+// ReadableFile resolves a workspace file the actor may fetch: a
+// non-Markdown file that a page the actor may read links or embeds. Files
+// carry no access policy of their own, so they take it from the pages that
+// use them; a file no readable page references is not served at all, and
+// neither is harness state, a symbolic link, or a dotfile. It returns the
+// file's path on disk.
+func (w *Workspace) ReadableFile(actor, rel string) (string, bool) {
+	rel = strings.TrimPrefix(path.Clean("/"+filepath.ToSlash(rel)), "/")
+	if rel == "" || reservedPath(rel) {
+		return "", false
+	}
+	for _, part := range strings.Split(rel, "/") {
+		if strings.HasPrefix(part, ".") {
+			return "", false
+		}
+	}
+	idx, err := w.assets()
+	if err != nil || !idx.paths[rel] {
+		return "", false
+	}
+	for _, p := range w.sorted() {
+		if !w.Allowed(actor, p, Read) {
+			continue
+		}
+		refs := append(append([]string{}, p.Links...), p.Embeds...)
+		if p.Kind == Task {
+			proofs, _ := taskRefs(p, "proof")
+			refs = append(refs, proofs...)
+		}
+		for _, ref := range refs {
+			if f, ok, _ := idx.resolve(p.Path, ref); ok && f == rel {
+				return filepath.Join(w.Root, filepath.FromSlash(rel)), true
+			}
+		}
+	}
+	return "", false
 }

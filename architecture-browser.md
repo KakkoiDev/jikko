@@ -48,9 +48,11 @@ Browser and native workspaces use Git-compatible history. The browser Git adapte
 
 Jikko deliberately does **not** assign application meaning to branches. It does not know about games, universes, save slots, experiments, or timelines. Applications own branch naming and selective-sync policy.
 
-Authentication is injected by the host application and must never be persisted into Jikko source files. Provider-specific OAuth/device-flow behavior and CORS/proxy policy stay outside the Jikko core.
+Authentication is injected by the host application and must never be persisted into Jikko source files. Offline mode is single-user local mode: the host binds one individual Identity when it opens the workspace, the Go core validates it, and every operation acts as it; a call cannot name another actor. Browser storage is the security boundary there, as the filesystem is for a native workspace, so permissions filter what the bound Identity sees but are not a sandbox against the device owner. Provider-specific OAuth/device-flow behavior and CORS/proxy policy stay outside the Jikko core.
 
 ## HTMX boundary
+
+The templates live in `web/templates` and are embedded with the static assets, so any harness that serves the interface uses the same markup. Pages are server-rendered by the Go core's Markdown renderer; HTMX posts the edit and comment forms and swaps the returned `#page` section in place, and every form also works as a plain post without script. `web/assets/jikko.js` only copies a text selection into the new-comment form.
 
 Native HTMX requests go to HTTP routes. Offline HTMX actions are intercepted by the offline transport and dispatched to `OfflineBackend`. Templates and interaction intent should stay shared; transport-specific code must not become application state.
 

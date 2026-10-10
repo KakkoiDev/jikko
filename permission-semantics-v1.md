@@ -33,6 +33,8 @@ If a `permissions` mapping is present, each declared grant is evaluated through 
 
 A workspace MAY operate locally without authentication while no Jikko operation requires an authenticated Identity. Authentication becomes necessary when the harness must evaluate identity-specific permissions or attribute an authenticated operation.
 
+The reference harness's browser runtime (WASM over OPFS) is such a local mode. It holds no credentials; the host application binds one individual Identity when it opens the workspace, every operation acts as that Identity, and the device owner's browser storage is the security boundary.
+
 The reference harness uses `jikko auth create <identity>` to create a credential for an existing individual Identity. The credential hash is stored in the gitignored `.auth.md`; the bearer token is displayed once.
 
 Authentication MUST resolve to an individual Identity. An Identity containing `members` is a group and cannot directly authenticate.
@@ -62,6 +64,8 @@ A Jikko harness MUST validate authorization references and reject or clearly rep
 Renaming an Identity through Jikko MUST update references to that Identity in permission policies as part of the same semantic operation. External filesystem renames are not guessed; `jikko check` reports resulting dangling references.
 
 Deleting an Identity that is referenced by a permission policy MUST NOT silently weaken or broaden access. The semantic delete operation must either update/remove those references explicitly with authorization or reject the deletion and report the inbound ACL references.
+
+The reference harness reads these rules as follows. `jikko rename` rewrites the Identity's name in every `permissions` policy and group `members` list in the same staged operation; rewriting a policy needs `admin` on that file, and the before/after authorization comparison below must find no change, with the renamed Identity compared under its old name. `jikko delete` of an Identity named by a policy or a group is rejected and the references are listed; `jikko delete --prune` removes them instead, needing `write` on each group and `admin` on each policy changed, and is still rejected if it would leave a restricted file with no administrator or raise anyone's access, as emptying a group's `members` can. The credentials of a renamed Identity move with it; those of a deleted Identity are revoked.
 
 ## Authorization-sensitive Identity mutations
 

@@ -519,3 +519,241 @@ func TestDoneTaskWithCommentsWarns(t *testing.T) {
 		t.Fatalf("title kept the markers: %q", out)
 	}
 }
+
+func TestRenameCommand(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	if _, _, err := cli(t, rename, "tasks/ship", "tasks/launch", "--dir", dir); err == nil {
+		t.Fatal("anonymous rename accepted")
+	}
+	if _, _, err := cli(t, rename, "tasks/ship", "--dir", dir, "--token", aliceToken); err == nil {
+		t.Fatal("rename without a destination accepted")
+	}
+	// bob may read secret.md but not write it.
+	if _, _, err := cli(t, rename, "secret", "public", "--dir", dir, "--token", bobToken); err == nil {
+		t.Fatal("a reader renamed a page")
+	}
+	out := mustCLI(t, rename, "tasks/ship", "tasks/launch", "--dir", dir, "--token", aliceToken)
+	if !strings.Contains(out, "renamed tasks/ship.md -> tasks/launch.md") || !strings.Contains(out, "rewrote open.md (body): tasks/ship -> tasks/launch") {
+		t.Fatalf("rename output:\n%s", out)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "open.md"))
+	if err != nil || !strings.Contains(string(b), "[[tasks/launch]]") {
+		t.Fatalf("open.md = %q (%v)", b, err)
+	}
+
+	var res struct {
+		From, To string
+		Broken   []struct{ Path, From string }
+	}
+	out = mustCLI(t, rename, "tasks/launch", "tasks/ship", "--no-rewrite", "--json", "--dir", dir, "--token", aliceToken)
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.To != "tasks/ship.md" || len(res.Broken) != 1 || res.Broken[0].Path != "open.md" {
+		t.Fatalf("no-rewrite result = %+v", res)
+	}
+}
+
+func TestDeleteCommand(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	if _, _, err := cli(t, deletePage, "open", "--dir", dir); err == nil {
+		t.Fatal("anonymous delete accepted")
+	}
+	if _, _, err := cli(t, deletePage, "secret", "--dir", dir, "--token", bobToken); err == nil {
+		t.Fatal("a reader deleted a page")
+	}
+	// crew is named by secret.md's policy: refused without --prune.
+	_, errOut, err := cli(t, deletePage, "crew", "--dir", dir, "--token", aliceToken)
+	if err == nil || !strings.Contains(err.Error(), "--prune") {
+		t.Fatalf("delete of a policy identity: %v %s", err, errOut)
+	}
+	_, errOut, err = cli(t, deletePage, "tasks/ship", "--dir", dir, "--token", aliceToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, `open.md (body): "tasks/ship" no longer resolves`) {
+		t.Fatalf("stderr = %q", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tasks/ship.md")); !os.IsNotExist(err) {
+		t.Fatal("page not deleted")
+	}
+}
+
+func TestViewCommand(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("tasks/review.md", "---\ntype: task\nstatus: doing\nassignee: bob\npermissions:\n  read: alice\n  admin: alice\n---\n# Review\n")
+	write("tasks/plan.md", "---\ntype: task\nstatus: todo\n---\n# Plan\n")
+	write("by-status.md", "---\ntype: view\nfilter:\n  type: task\n  status: [todo, doing]\nview:\n  group: status\n  sort: title\n---\n")
+	write("broken.md", "---\ntype: view\nfilter: everything\n---\n")
+
+	out := mustCLI(t, view, "by-status", "--dir", dir, "--token", aliceToken)
+	want := "status: todo (2)\n  task      tasks/plan.md                  Plan\n  task      tasks/ship.md                  Ship it\nstatus: doing (1)\n  task      tasks/review.md                Review\n"
+	if out != want {
+		t.Fatalf("view output:\n%s\nwant:\n%s", out, want)
+	}
+	var res struct {
+		Pages  []struct{ Path string }
+		Groups []struct {
+			Key   string
+			Pages []struct{ Path string }
+		}
+	}
+	out = mustCLI(t, view, "by-status", "--json", "--dir", dir, "--token", bobToken)
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Pages) != 2 || len(res.Groups) != 2 || len(res.Groups[1].Pages) != 0 {
+		t.Fatalf("bob's view = %+v", res)
+	}
+	if out := mustCLI(t, view, "board", "--dir", dir); !strings.Contains(out, "tasks/ship.md") {
+		t.Fatalf("ungrouped view:\n%s", out)
+	}
+	if _, _, err := cli(t, view, "broken", "--dir", dir); err == nil {
+		t.Fatal("a broken view was evaluated")
+	}
+	if _, _, err := cli(t, view, "--dir", dir); err == nil {
+		t.Fatal("view without a reference accepted")
+	}
+	out, _, err := cli(t, check, "--dir", dir)
+	if err == nil || !strings.Contains(out, "broken.md: [view] filter must be a mapping") {
+		t.Fatalf("check:\n%s", out)
+	}
+}
+
+func TestCheckReportsWorkModel(t *testing.T) {
+	dir := workspace(t, map[string]string{
+		"alice.md": "---\ntype: identity\n---\n",
+		"a.md":     "---\ntype: task\nstatus: done\nrequires: [proof]\n---\n# A\n",
+		"b.md":     "---\ntype: task\nstatus: todo\nassignee: ghost\n---\n# B\n",
+	})
+	out, _, err := cli(t, check, "--dir", dir)
+	if err == nil || !strings.Contains(out, `b.md: [reference] assignee "ghost" is not an identity`) || !strings.Contains(out, "a.md: warning: [work] task is done but requires proof") {
+		t.Fatalf("check:\n%s", out)
+	}
+}
+
+func TestShowRawAndSave(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	src, errOut, err := cli(t, show, "open", "--raw", "--dir", dir)
+	if err != nil || src != "# Open\n\nSee [[tasks/ship]]. @crew please look.\n" {
+		t.Fatalf("raw = %q (%v)", src, err)
+	}
+	rev := strings.TrimSpace(errOut[strings.LastIndex(errOut, " ")+1:])
+	var page struct{ Rev string }
+	if err := json.Unmarshal([]byte(mustCLI(t, show, "open", "--json", "--dir", dir)), &page); err != nil || page.Rev != rev {
+		t.Fatalf("show --json rev %q, raw rev %q", page.Rev, rev)
+	}
+	if _, _, err := cli(t, show, "open", "secret", "--raw", "--dir", dir); err == nil {
+		t.Fatal("--raw accepted two pages")
+	}
+	if _, _, err := cli(t, show, "secret", "--raw", "--dir", dir); err == nil {
+		t.Fatal("anonymous caller read restricted source")
+	}
+
+	scratch := t.TempDir()
+	put := func(name, content string) string {
+		p := filepath.Join(scratch, name)
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	base := put("base.md", src)
+	yours := put("yours.md", strings.Replace(src, "# Open", "# Open work", 1))
+	if _, _, err := cli(t, save, "open", "--rev", rev, "--file", yours, "--dir", dir); err == nil {
+		t.Fatal("anonymous save accepted")
+	}
+	// Someone else changes the last line meanwhile.
+	theirs := strings.Replace(src, "please look.", "please look today.", 1)
+	if err := os.WriteFile(filepath.Join(dir, "open.md"), []byte(theirs), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Without a base the change cannot be merged: a structured conflict.
+	out, _, err := cli(t, save, "open", "--rev", rev, "--file", yours, "--json", "--dir", dir, "--token", bobToken)
+	var conflict struct {
+		Conflict struct {
+			Path      string `json:"path"`
+			BaseKnown bool   `json:"base_known"`
+			Body      []struct{ Line int }
+		}
+	}
+	if err == nil || json.Unmarshal([]byte(out), &conflict) != nil || conflict.Conflict.Path != "open.md" || conflict.Conflict.BaseKnown {
+		t.Fatalf("conflict: %v %s", err, out)
+	}
+	out = mustCLI(t, save, "open", "--rev", rev, "--file", yours, "--base", base, "--dir", dir, "--token", bobToken)
+	if !strings.HasPrefix(out, "merged open.md rev ") {
+		t.Fatalf("save output %q", out)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "open.md"))
+	if string(b) != "# Open work\n\nSee [[tasks/ship]]. @crew please look today.\n" {
+		t.Fatalf("open.md = %q", b)
+	}
+	// A conflicting edit prints the regions and fails.
+	newRev := strings.TrimSpace(strings.TrimPrefix(out, "merged open.md rev "))
+	if err := os.WriteFile(filepath.Join(dir, "open.md"), []byte("# Open work, theirs\n\nSee [[tasks/ship]]. @crew please look today.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mine := put("mine.md", "# Open work, mine\n\nSee [[tasks/ship]]. @crew please look today.\n")
+	out, _, err = cli(t, save, "open", "--rev", newRev, "--file", mine, "--base", put("b2.md", string(b)), "--dir", dir, "--token", aliceToken)
+	if err == nil || !strings.Contains(out, "[body:0] body at line 1:") || !strings.Contains(out, "current:\n      # Open work, theirs") {
+		t.Fatalf("conflict output %v:\n%s", err, out)
+	}
+	current := out[strings.Index(out, "--against ")+len("--against "):]
+	current = current[:strings.Index(current, " ")]
+	if _, _, err := cli(t, save, "open", "--rev", newRev, "--file", mine, "--resolve", "body:0=mine", "--against", current, "--dir", dir, "--token", aliceToken); err == nil {
+		t.Fatal("a bad resolution side was accepted")
+	}
+	out = mustCLI(t, save, "open", "--rev", newRev, "--file", mine, "--base", filepath.Join(scratch, "b2.md"), "--resolve", "body:0=yours", "--against", current, "--dir", dir, "--token", aliceToken)
+	if b, _ := os.ReadFile(filepath.Join(dir, "open.md")); !strings.HasPrefix(out, "merged") || !strings.HasPrefix(string(b), "# Open work, mine\n") {
+		t.Fatalf("resolution: %s %q", out, b)
+	}
+	if _, _, err := cli(t, save, "secret", "--rev", rev, "--file", mine, "--dir", dir, "--token", bobToken); err == nil {
+		t.Fatal("a reader saved")
+	}
+}
+
+func TestUploadCommand(t *testing.T) {
+	dir, aliceToken, bobToken := team(t)
+	t.Setenv("JIKKO_MAX_UPLOAD", "")
+	src := filepath.Join(t.TempDir(), "chart.png")
+	if err := os.WriteFile(src, []byte("0123456789"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cli(t, upload, src, "--dir", dir); err == nil {
+		t.Fatal("anonymous upload accepted")
+	}
+	if _, _, err := cli(t, upload, src, "--into", "secret", "--dir", dir, "--token", bobToken); err == nil {
+		t.Fatal("a reader embedded into a page")
+	}
+	if _, _, err := cli(t, upload, src, "--max-upload", "9", "--dir", dir, "--token", aliceToken); err == nil || !strings.Contains(err.Error(), "maximum upload size is 9") {
+		t.Fatalf("limit: %v", err)
+	}
+	t.Setenv("JIKKO_MAX_UPLOAD", "5")
+	if _, _, err := cli(t, upload, src, "--dir", dir, "--token", aliceToken); err == nil {
+		t.Fatal("JIKKO_MAX_UPLOAD ignored")
+	}
+	t.Setenv("JIKKO_MAX_UPLOAD", "1K")
+	var res struct{ Path, Into, Embed string }
+	out := mustCLI(t, upload, src, "--into", "open", "--json", "--dir", dir, "--token", aliceToken)
+	if err := json.Unmarshal([]byte(out), &res); err != nil || res.Path != "chart.png" || res.Embed != "chart.png" || res.Into != "open.md" {
+		t.Fatalf("upload = %q (%v)", out, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "open.md")); !strings.HasSuffix(string(b), "\n\n![[chart.png]]\n") {
+		t.Fatalf("open.md = %q", b)
+	}
+	for in, want := range map[string]int64{"": 25 << 20, "100": 100, "2k": 2048, "25M": 25 << 20, "1GiB": 1 << 30, "3MB": 3 << 20} {
+		if got, err := parseSize(in); err != nil || got != want {
+			t.Errorf("parseSize(%q) = %d, %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"x", "-1", "0", "1T"} {
+		if _, err := parseSize(bad); err == nil {
+			t.Errorf("parseSize(%q) accepted", bad)
+		}
+	}
+}
