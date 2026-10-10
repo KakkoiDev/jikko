@@ -1,6 +1,6 @@
 # Identity and Permissions
 
-This document is normative for the Jikko v1 identity, authentication boundary, and authorization model. It supersedes the older `Group` and namespaced-identity design in `specification-v1.md` until that specification is consolidated.
+This document is normative for the Jikko v1 identity, authentication boundary, and authorization model. `specification-v1.md` §9 defers to it; the older `Group` type and `human:`/`agent:` namespaces are gone.
 
 ## 1. Identity is the primitive
 
@@ -118,15 +118,18 @@ credentials:
 
 The reference harness MUST store only a cryptographic hash of each bearer token, never the bearer token itself. Tokens MUST be generated using a cryptographically secure random source and contain sufficient entropy to resist guessing.
 
-A conceptual CLI flow is:
+The CLI flow is:
 
 ```sh
 jikko auth create alice
+jikko auth list
+jikko auth revoke alice --id <id>
+jikko auth revoke alice
 ```
 
-The harness generates a token, stores its hash in `.auth.md`, and displays the token once. The caller presents that token to authenticate as `alice`.
+The harness generates a token, stores its hash in `.auth.md`, and displays the token once. The caller presents that token to authenticate as `alice`. `jikko init` creates the first identity and its credential together.
 
-Multiple credentials MAY map to the same individual Identity so that credentials can be independently created and revoked without changing the Identity file.
+Multiple credentials MAY map to the same individual Identity so that credentials can be independently created and revoked without changing the Identity file. The reference harness lists them by identity, a short id derived from the hash, and creation time, and revokes one by id or all of an identity's at once.
 
 For browser use, the permanent bearer token SHOULD be exchanged for a normal secure session rather than retransmitted unnecessarily on every request. Browser session cookies SHOULD use appropriate `HttpOnly`, `Secure`, and same-site protections when applicable.
 
