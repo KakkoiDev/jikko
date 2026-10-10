@@ -108,10 +108,16 @@ func (w *Workspace) Upload(actor, name string, data []byte, opt UploadOptions) (
 		return f.Close()
 	}
 	if into == nil {
+		if w.AutoCommit && !GitBacked(w.Root) {
+			return nil, fmt.Errorf("upload rejected: %w", ErrNoGit)
+		}
 		if err := writeFile(); err != nil {
 			return nil, err
 		}
 		w.adopt(cur)
+		if err := w.autoCommit(actor, "upload", []string{rel}); err != nil {
+			return nil, err
+		}
 		return res, nil
 	}
 	page, err := cur.safePath(into)
@@ -136,7 +142,9 @@ func (w *Workspace) Upload(actor, name string, data []byte, opt UploadOptions) (
 	}
 	res.Into = into.Path
 	next := appendEmbed(raw, res.Embed)
-	err = w.stage(actor, "upload", writes(map[string][]byte{into.Path: next}), func(current *Workspace) error {
+	c := writes("upload", map[string][]byte{into.Path: next})
+	c.files = []string{rel}
+	err = w.stage(actor, "upload", c, func(current *Workspace) error {
 		if now, ok := current.Pages[into.Path]; !ok || now.Rev != into.Rev {
 			return fmt.Errorf("%s changed on disk after it was read; retry", into.Path)
 		} else if !current.Allowed(actor, now, Write) {

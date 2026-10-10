@@ -6,12 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"flag"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -47,6 +47,9 @@ type cache struct {
 	ws    *jikko.Workspace
 	err   error
 	ready bool
+
+	// autoCommit records every mutation as an attributed Git commit.
+	autoCommit bool
 }
 
 func (c *cache) load() (*jikko.Workspace, error) {
@@ -60,8 +63,11 @@ func (c *cache) load() (*jikko.Workspace, error) {
 		return c.ws, c.err
 	}
 	ws, err := jikko.Open(c.dir)
-	if err == nil && len(ws.Problems) > 0 {
-		log.Printf("%d workspace problem(s); run `jikko check` for detail", len(ws.Problems))
+	if err == nil {
+		ws.AutoCommit = c.autoCommit
+		if len(ws.Problems) > 0 {
+			log.Printf("%d workspace problem(s); run `jikko check` for detail", len(ws.Problems))
+		}
 	}
 	c.stamp, c.ws, c.err, c.ready = stamp, ws, err, true
 	return ws, err
@@ -212,21 +218,29 @@ type pageData struct {
 
 func serve(args []string) error {
 	var addr, maxUpload *string
-	var trustProxy *bool
-	args, dir, _, err := flags("serve", args, func(f *flag.FlagSet) {
+	var trustProxy, autoCommit *bool
+	args, dir, err := flagsNoToken("serve", args, func(f *flag.FlagSet) {
 		addr = f.String("addr", "127.0.0.1:8080", "listen address")
 		maxUpload = f.String("max-upload", os.Getenv("JIKKO_MAX_UPLOAD"), "maximum upload size, such as 25M (or JIKKO_MAX_UPLOAD)")
 		trustProxy = f.Bool("behind-proxy", false, "trust X-Forwarded-Proto from a reverse proxy when setting cookie Secure")
+		autoCommit = f.Bool("auto-commit", false, "record every change as a Git commit with Jikko-Actor and Jikko-Operation trailers")
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) != 0 {
-		return errors.New("usage: jikko serve [flags]")
+		return usageOf("serve")
+	}
+	if _, err := openWorkspace(*dir); err != nil {
+		return err
 	}
 	root, err := filepath.Abs(*dir)
 	if err != nil {
 		return err
+	}
+	warnWithoutGit(root)
+	if *autoCommit && !jikko.GitBacked(root) {
+		return fmt.Errorf("--auto-commit: %w", jikko.ErrNoGit)
 	}
 
 	limit, err := parseSize(*maxUpload)
@@ -235,6 +249,7 @@ func serve(args []string) error {
 	}
 	s := newServer(root, *trustProxy)
 	s.maxUpload = limit
+	s.cache.autoCommit = *autoCommit
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           s.routes(),
@@ -244,8 +259,14 @@ func serve(args []string) error {
 		// No WriteTimeout: it would sever live event streams. streamMaxAge
 		// bounds their lifetime instead.
 	}
-	log.Printf("Jikko: http://%s", *addr)
-	return srv.ListenAndServe()
+	// Bind before announcing, so a bad address fails instead of logging
+	// a URL nobody can open.
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return err
+	}
+	log.Printf("serving %s at http://%s", root, ln.Addr())
+	return srv.Serve(ln)
 }
 
 func newServer(root string, trustProxy bool) *server {

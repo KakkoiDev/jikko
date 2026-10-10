@@ -17,39 +17,20 @@ import (
 	jikko "github.com/KakkoiDev/jikko"
 )
 
-const identityUsage = `usage:
-  jikko identity list [--json]
-  jikko identity <name> status [--json]
-  jikko identity <name> start [--runner <cmd>] [--sandbox <dir>] [--interval 60s] [--once] [--token <t>]
-  jikko identity <name> stop
-
-list shows every identity that is or was running as an agent: online or not,
-idle or working, and on which task.
-
-start runs an agent as the identity: every task page assigned to it (directly or
-through a group) whose status is todo is handed to the runner, one at a time,
-then the loop sleeps --interval and looks again. --once does a single pass.
-While it runs it records its presence under .data/presence so the UI and
-"identity list" can show it; stop sends it SIGTERM.
-
-The runner is any executable (--runner, or JIKKO_RUNNER). It is started once per
-task with the task's project directory as working directory and:
-  JIKKO_DIR        the workspace
-  JIKKO_TOKEN      a credential for the identity (--token, or minted)
-  JIKKO_IDENTITY   the identity name
-  JIKKO_TASK       the task reference, e.g. tasks/wc-cli
-  JIKKO_BIN        this binary
-Project directories are <sandbox>/<task stem>; --sandbox defaults to
-<workspace>/.data/work/<identity>, which Jikko never indexes.
-
-status shows the identity's presence and the tasks start would run.`
-
 func identity(args []string) error {
-	if len(args) >= 1 && args[0] == "list" {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		f := flag.NewFlagSet("identity", flag.ContinueOnError)
+		f.String("dir", ".", "workspace directory")
+		startFlags(f)
+		f.Bool("json", false, "JSON output (list, status)")
+		printHelp("identity", f, os.Stdout)
+		return flag.ErrHelp
+	}
+	if args[0] == "list" {
 		return identityList(args[1:])
 	}
 	if len(args) < 2 {
-		return errors.New(identityUsage)
+		return usageOf("identity")
 	}
 	name, verb := args[0], args[1]
 	switch verb {
@@ -60,17 +41,26 @@ func identity(args []string) error {
 	case "stop":
 		return identityStop(name, args[2:])
 	}
-	return errors.New(identityUsage)
+	return usageOf("identity")
+}
+
+// startFlags declares the flags of `identity <name> start`; help lists them too.
+func startFlags(f *flag.FlagSet) (runner, sandbox *string, interval *time.Duration, once *bool) {
+	runner = f.String("runner", os.Getenv("JIKKO_RUNNER"), "executable run once per task (or JIKKO_RUNNER)")
+	sandbox = f.String("sandbox", "", "where task project directories are created")
+	interval = f.Duration("interval", time.Minute, "pause between passes")
+	once = f.Bool("once", false, "run one pass and exit")
+	return
 }
 
 func identityList(args []string) error {
 	var asJSON *bool
-	args, dir, _, err := flags("identity list", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
+	args, dir, _, err := flags("identity", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
 	if err != nil {
 		return err
 	}
 	if len(args) != 0 {
-		return errors.New(identityUsage)
+		return usageOf("identity")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
@@ -105,12 +95,12 @@ func identityList(args []string) error {
 
 func identityStatus(name string, args []string) error {
 	var asJSON *bool
-	args, dir, _, err := flags("identity status", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
+	args, dir, _, err := flags("identity", args, func(f *flag.FlagSet) { asJSON = f.Bool("json", false, "JSON output") })
 	if err != nil {
 		return err
 	}
 	if len(args) != 0 {
-		return errors.New(identityUsage)
+		return usageOf("identity")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
@@ -158,12 +148,12 @@ func identityStatus(name string, args []string) error {
 }
 
 func identityStop(name string, args []string) error {
-	args, dir, _, err := flags("identity stop", args, nil)
+	args, dir, _, err := flags("identity", args, nil)
 	if err != nil {
 		return err
 	}
 	if len(args) != 0 {
-		return errors.New(identityUsage)
+		return usageOf("identity")
 	}
 	w, err := openWorkspace(*dir)
 	if err != nil {
@@ -194,17 +184,14 @@ func identityStart(name string, args []string) error {
 	var once *bool
 	// --token comes from the shared flag set: here it is the credential the
 	// runner receives, minted when absent.
-	args, dir, token, err := flags("identity start", args, func(f *flag.FlagSet) {
-		runner = f.String("runner", os.Getenv("JIKKO_RUNNER"), "executable run once per task (or JIKKO_RUNNER)")
-		sandbox = f.String("sandbox", "", "where task project directories are created")
-		interval = f.Duration("interval", time.Minute, "pause between passes")
-		once = f.Bool("once", false, "run one pass and exit")
+	args, dir, token, err := flags("identity", args, func(f *flag.FlagSet) {
+		runner, sandbox, interval, once = startFlags(f)
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) != 0 {
-		return errors.New(identityUsage)
+		return usageOf("identity")
 	}
 	if *runner == "" {
 		return errors.New("identity start: --runner (or JIKKO_RUNNER) is required")

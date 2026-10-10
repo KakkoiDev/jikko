@@ -17,18 +17,19 @@ import (
 func web(args []string) error {
 	var noOpen *bool
 	var addr, maxUpload *string
-	var trustProxy *bool
+	var trustProxy, autoCommit *bool
 	args, dir, _, err := flags("web", args, func(f *flag.FlagSet) {
 		addr = f.String("addr", "127.0.0.1:8080", "listen address")
 		maxUpload = f.String("max-upload", os.Getenv("JIKKO_MAX_UPLOAD"), "maximum upload size, such as 25M (or JIKKO_MAX_UPLOAD)")
 		trustProxy = f.Bool("behind-proxy", false, "trust X-Forwarded-Proto from a reverse proxy when setting cookie Secure")
+		autoCommit = f.Bool("auto-commit", false, "record every change as a Git commit with Jikko-Actor and Jikko-Operation trailers")
 		noOpen = f.Bool("no-open", false, "do not open a browser")
 	})
 	if err != nil {
 		return err
 	}
 	if len(args) != 0 {
-		return fmt.Errorf("usage: jikko web [flags]")
+		return usageOf("web")
 	}
 	forward := []string{"--dir", *dir, "--addr", *addr}
 	if *maxUpload != "" {
@@ -36,6 +37,9 @@ func web(args []string) error {
 	}
 	if *trustProxy {
 		forward = append(forward, "--behind-proxy")
+	}
+	if *autoCommit {
+		forward = append(forward, "--auto-commit")
 	}
 	if !*noOpen {
 		go openWhenUp(*addr)

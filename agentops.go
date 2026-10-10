@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TreeEntry is the deliberately small representation exposed to agents.
@@ -46,10 +48,40 @@ func (w *Workspace) ReadMany(actor string, refs ...string) ([]*Page, error) {
 
 var mentionPattern = regexp.MustCompile(`(^|[^[:alnum:]_./-])@([[:alnum:]_./-]+)`)
 
+// MentionPage is a readable page that addresses an identity, with every
+// line that does so.
+type MentionPage struct {
+	Path    string         `json:"path"`
+	Title   string         `json:"title"`
+	Type    Kind           `json:"type"`
+	Matches []MentionMatch `json:"matches"`
+}
+
+// MentionMatch is one line of a page that mentions the identity.
+type MentionMatch struct {
+	// Line is the 1-based line of the page's source file.
+	Line int `json:"line"`
+	// Text is the line, trimmed.
+	Text string `json:"text"`
+	// Comment is the id of the comment thread the line belongs to, when the
+	// mention was made in a comment.
+	Comment string `json:"comment,omitempty"`
+}
+
 // Mentions returns readable pages that address actor directly or through one
 // of its Identity groups. Mention indexes may later cache this derived result;
 // Markdown remains the source of truth.
 func (w *Workspace) Mentions(actor string) []*Page {
+	var out []*Page
+	for _, m := range w.MentionDetails(actor) {
+		out = append(out, w.Pages[m.Path])
+	}
+	return out
+}
+
+// MentionDetails is Mentions with the matching lines of each page, so a
+// caller can act on a mention without re-reading the page to find it.
+func (w *Workspace) MentionDetails(actor string) []MentionPage {
 	person, ok := w.ResolveIdentity(actor)
 	if !ok || len(person.Members) != 0 {
 		return nil
@@ -74,32 +106,117 @@ func (w *Workspace) Mentions(actor string) []*Page {
 			address(candidate)
 		}
 	}
-	var out []*Page
+	var out []MentionPage
 	for _, p := range w.sorted() {
 		if !w.Allowed(actor, p, Read) {
 			continue
 		}
-		found := false
 		// "@name:" in front of a comment message attributes it; it is not a
 		// request for that identity's attention.
-		scanProse(blankCommentAuthors(p.Body), func(line string) {
-			if found {
-				return
-			}
+		body := blankCommentAuthors(p.Body)
+		spans, _ := scanComments(p.Body)
+		offsets := lineOffsets(body)
+		var matches []MentionMatch
+		scanProseLines(body, func(i int, line string) {
 			for _, m := range mentionPattern.FindAllStringSubmatch(line, -1) {
 				// Sentence punctuation is not part of the name: "@alice." and
 				// "@alice/" address alice.
-				if names[strings.TrimRight(m[2], "./-")] {
-					found = true
-					return
+				if !names[strings.TrimRight(m[2], "./-")] {
+					continue
 				}
+				match := MentionMatch{Line: p.bodyLine + i, Text: strings.TrimSpace(strings.TrimSuffix(strings.Split(p.Body, "\n")[i], "\r"))}
+				for _, s := range spans {
+					if s.threadStart >= 0 && offsets[i] >= s.threadStart && offsets[i] < s.threadEnd {
+						match.Comment = s.id
+					}
+				}
+				matches = append(matches, match)
+				return
 			}
 		})
-		if found {
-			out = append(out, p)
+		if len(matches) > 0 {
+			out = append(out, MentionPage{Path: p.Path, Title: p.Title, Type: p.Kind, Matches: matches})
 		}
 	}
 	return out
+}
+
+// lineOffsets returns the byte offset at which each line of body starts.
+func lineOffsets(body string) []int {
+	offsets := []int{0}
+	for i, c := range []byte(body) {
+		if c == '\n' {
+			offsets = append(offsets, i+1)
+		}
+	}
+	return offsets
+}
+
+// AssignedTo reports whether a page's assignee names identity, directly or
+// through a group it belongs to (specification §2.2).
+func (w *Workspace) AssignedTo(p *Page, identity string) bool {
+	person, ok := w.ResolveIdentity(identity)
+	if !ok {
+		return false
+	}
+	refs, _ := taskRefs(p, "assignee")
+	for _, ref := range refs {
+		target, ok := w.ResolveIdentity(ref)
+		if !ok {
+			continue
+		}
+		if target == person || w.containsIdentity(target, person.Path, map[string]bool{}) {
+			return true
+		}
+	}
+	return false
+}
+
+// NewPageSource composes the source of a new page of a kind from content
+// that may or may not carry frontmatter. Content without frontmatter gets a
+// `type` for a task, view, or identity, and a task also gets `status: todo`.
+// Content with frontmatter keeps it; its declared type must agree with kind.
+// A view has no body, so view content without frontmatter is read as the
+// frontmatter itself.
+func NewPageSource(kind Kind, content string) ([]byte, error) {
+	raw := []byte(content)
+	if !opensFrontmatter(raw) {
+		if kind == View {
+			raw = []byte("---\n" + strings.TrimRight(content, "\n") + "\n---\n")
+		} else if kind != Document {
+			raw = append([]byte("---\n---\n"), raw...)
+		}
+	}
+	page, _ := parseSource("new.md", raw, false)
+	if declared, has := page.Metadata["type"]; has {
+		if s, _ := declared.(string); s != string(kind) && !(kind == Document && s == "") {
+			return nil, fmt.Errorf("the content declares type %v, not %s", declared, kind)
+		}
+	}
+	if kind == Document && !opensFrontmatter(raw) {
+		return raw, nil
+	}
+	return rewriteFrontmatter(raw, func(m *yaml.Node) error {
+		if kind != Document {
+			if err := setMappingDefault(m, "type", string(kind)); err != nil {
+				return err
+			}
+		}
+		if kind == Task {
+			return setMappingDefault(m, "status", "todo")
+		}
+		return nil
+	})
+}
+
+// setMappingDefault sets a frontmatter key only when it is absent.
+func setMappingDefault(m *yaml.Node, key, value string) error {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return nil
+		}
+	}
+	return setMappingValue(m, key, value)
 }
 
 // CreatePage creates a Markdown source page through the same validation model
@@ -126,7 +243,7 @@ func (w *Workspace) CreatePage(actor, pagePath, content string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	return w.stage(actor, "creation", writes(map[string][]byte{clean: []byte(content)}), func(current *Workspace) error {
+	return w.stage(actor, "creation", writes("create", map[string][]byte{clean: []byte(content)}), func(current *Workspace) error {
 		if _, exists := current.Pages[clean]; exists {
 			return fmt.Errorf("%s already exists", clean)
 		}

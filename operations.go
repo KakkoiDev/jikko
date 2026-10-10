@@ -50,7 +50,7 @@ func (w *Workspace) ReplaceBody(actor, ref, body string) error {
 	if !w.Allowed(actor, p, Write) {
 		return fmt.Errorf("%s lacks write on %s", actor, p.Path)
 	}
-	return w.mutateFile(actor, p, Write, func(raw []byte) ([]byte, error) { return replaceBody(raw, body) })
+	return w.mutateFile(actor, p, Write, "replace-body", func(raw []byte) ([]byte, error) { return replaceBody(raw, body) })
 }
 
 func (w *Workspace) ReplaceBodyWithToken(token, ref, body string) error {

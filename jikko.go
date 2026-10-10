@@ -85,12 +85,23 @@ type Page struct {
 	// symlink marks a page reached through a symbolic link. It is readable
 	// but never written through, so a mutation cannot escape the workspace.
 	symlink bool
+	// bodyLine is the 1-based line of the file where the body starts.
+	bodyLine int
 }
 
 type Workspace struct {
 	Root     string
 	Pages    map[string]*Page
 	Problems []Problem
+
+	// AutoCommit records every successful semantic mutation as one Git
+	// commit limited to the files it touched, with Jikko-Actor and
+	// Jikko-Operation trailers (specification §10). A mutation on a
+	// workspace that is not Git-backed then fails with ErrNoGit before
+	// anything is written.
+	AutoCommit bool
+	// OnCommit, when set, is called with each commit AutoCommit records.
+	OnCommit func(*CommitResult)
 
 	byStem map[string][]*Page
 }
@@ -195,6 +206,7 @@ func parseSource(rel string, raw []byte, symlink bool) (*Page, []Problem) {
 
 	front, body, hasFront := splitFrontmatter(raw)
 	p.Body = string(body)
+	p.bodyLine = 1 + bytes.Count(raw[:len(raw)-len(body)], []byte("\n"))
 	// policyUnreadable is set when metadata could not be read but appears to
 	// carry an access policy. Such a policy is unreadable, not absent.
 	policyUnreadable := false
@@ -379,8 +391,14 @@ var (
 // fenced code blocks and stripping inline code spans. Markdown inside code is
 // documentation about Jikko, not a reference or a heading.
 func scanProse(body string, visit func(line string)) {
+	scanProseLines(body, func(_ int, line string) { visit(line) })
+}
+
+// scanProseLines is scanProse that also passes each line's 0-based index in
+// the body.
+func scanProseLines(body string, visit func(index int, line string)) {
 	open := ""
-	for _, line := range strings.Split(body, "\n") {
+	for i, line := range strings.Split(body, "\n") {
 		line = strings.TrimSuffix(line, "\r")
 		if open != "" {
 			if strings.HasPrefix(strings.TrimSpace(line), open) {
@@ -392,7 +410,7 @@ func scanProse(body string, visit func(line string)) {
 			open = m[1]
 			continue
 		}
-		visit(inlineCodePattern.ReplaceAllString(line, ""))
+		visit(i, inlineCodePattern.ReplaceAllString(line, ""))
 	}
 }
 

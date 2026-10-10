@@ -145,16 +145,17 @@ func (s *server) activity(ws *jikko.Workspace, actor string, page *jikko.Page) *
 	if len(a.Comments) > 12 {
 		a.Comments = a.Comments[len(a.Comments)-12:]
 	}
-	commits, _ := ws.History(200)
+	commits, _ := ws.Log(actor, "", 200)
 	for _, c := range commits {
 		if c.Actor != ref {
 			continue
 		}
-		short := c.Hash
+		short := c.Commit
 		if len(short) > 7 {
 			short = short[:7]
 		}
-		a.Commits = append(a.Commits, commitView{Short: short, Subject: c.Subject, Operation: c.Operation, Ago: ago(c.Date)})
+		when, _ := time.Parse(time.RFC3339, c.Date)
+		a.Commits = append(a.Commits, commitView{Short: short, Subject: c.Subject, Operation: c.Operation, Ago: ago(when)})
 		if len(a.Commits) == 10 {
 			break
 		}

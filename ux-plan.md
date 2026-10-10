@@ -87,32 +87,35 @@ Notification delivery is a harness concern:
 
 - browser badge/sidebar;
 - SSE for connected clients;
-- `jikko mentions --for agent:codex --json` for deterministic querying;
-- eventual `jikko watch --for agent:codex` for long-running agents;
+- `jikko mentions --json` for deterministic querying by the authenticated identity, with `--since <rev>` to limit it to pages changed since a Git revision;
+- an eventual `jikko watch` for long-running agents;
 - OS/email/push integrations may be adapters later.
 
 Disposable runtime state may record that a particular mention/revision has already been delivered. Losing that state may duplicate a notification but must never lose workspace meaning.
 
 ## Groups
 
-Group is now a core primitive:
+A group is an Identity with `members`; there is no separate group type and no
+`human:` or `agent:` namespace (see `identity-permissions.md`):
 
 ```md
 ---
-type: group
+type: identity
 members:
-  - human:alice
-  - agent:codex
+  - alice
+  - codex
 ---
 
 # Maintainers
 ```
 
-Groups serve mentions, identity organization, possible group assignment, and future admin/authorization roles. Keep the authored `@group:name` intact rather than expanding it into individual mentions.
+Groups serve mentions, identity organization, group assignment, and
+authorization grants. Keep the authored `@maintainers` intact rather than
+expanding it into individual mentions.
 
 Do not define dynamic/query-derived groups yet. If a real workflow needs them, evaluate whether Views can participate without broadening View into an overly generic query-object abstraction.
 
-Authorization schema remains open. Any group used for authorization must be protected against self-escalation through harness operations. Jikko permissions cannot protect against actors who already have unrestricted filesystem/Git write access.
+Any group used for authorization is protected against self-escalation through harness operations: a membership change is judged by its effect on everyone's access. Jikko permissions cannot protect against actors who already have unrestricted filesystem/Git write access.
 
 ## Rename integrity
 
@@ -122,7 +125,7 @@ Authorization schema remains open. Any group used for authorization must be prot
 
 Use real Git as the reference harness history/diff/three-way-merge substrate rather than inventing a Jikko history database.
 
-Markdown/assets remain current state; Git provides historical state. Jikko semantic mutations should be commit-able as logical transactions and carry actor/operation attribution in structured commit metadata/trailers rather than writing `updated_by` into every file.
+Markdown/assets remain current state; Git provides historical state. Jikko semantic mutations are commit-able as logical transactions (`--commit`, `serve --auto-commit`, `jikko commit`) and carry actor/operation attribution in `Jikko-Actor`/`Jikko-Operation` commit trailers rather than writing `updated_by` into every file; `jikko log` reads them back.
 
 Concurrency starts with optimistic revision checks and Git-backed three-way text merge. Do not add CRDT/OT until simultaneous character-level coediting proves necessary.
 
