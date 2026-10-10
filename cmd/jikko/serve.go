@@ -108,6 +108,7 @@ type sessionEntry struct {
 	identity   string
 	credential string
 	expires    time.Time
+	seen       time.Time
 }
 
 func newSessionStore() *sessionStore { return &sessionStore{m: map[string]sessionEntry{}} }
@@ -126,8 +127,26 @@ func (s *sessionStore) create(identity, credential string) (string, error) {
 			delete(s.m, k)
 		}
 	}
-	s.m[id] = sessionEntry{identity: identity, credential: credential, expires: now.Add(sessionTTL)}
+	s.m[id] = sessionEntry{identity: identity, credential: credential, expires: now.Add(sessionTTL), seen: now}
 	return id, nil
+}
+
+// active reports the identities with a live session and when each last made
+// a request, so the interface can show who is here.
+func (s *sessionStore) active() map[string]time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	out := map[string]time.Time{}
+	for _, e := range s.m {
+		if now.After(e.expires) {
+			continue
+		}
+		if last, ok := out[e.identity]; !ok || e.seen.After(last) {
+			out[e.identity] = e.seen
+		}
+	}
+	return out
 }
 
 // lookup returns a live session without extending it.
@@ -151,6 +170,7 @@ func (s *sessionStore) touch(id string) {
 	defer s.mu.Unlock()
 	if e, ok := s.m[id]; ok && !time.Now().After(e.expires) {
 		e.expires = time.Now().Add(sessionTTL)
+		e.seen = time.Now()
 		s.m[id] = e
 	}
 }
@@ -186,6 +206,8 @@ type pageData struct {
 	Message string
 	Detail  *detailView
 	Edit    *editView
+	// Online is who is here: running agents and people with a live session.
+	Online []presenceView
 }
 
 func serve(args []string) error {
@@ -255,6 +277,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /comment/{path...}", s.commentPage)
 	mux.HandleFunc("POST /upload/{path...}", s.uploadFile)
 	mux.HandleFunc("GET /events/page/{path...}", s.pageEvents)
+	mux.HandleFunc("GET /events/activity/{path...}", s.activityEvents)
 	mux.HandleFunc("GET /files/{path...}", s.serveFile)
 	mux.HandleFunc("/", s.index)
 	return securityHeaders(mux)
@@ -349,7 +372,7 @@ func (s *server) data(r *http.Request, extend bool) (pageData, error) {
 		query = "?" + encoded
 	}
 	actor := s.actor(r, ws, extend)
-	return pageData{Pages: visiblePages(ws, actor, ws.List(kind, q.Get("status"))), Query: query, Actor: actor}, nil
+	return pageData{Pages: visiblePages(ws, actor, ws.List(kind, q.Get("status"))), Query: query, Actor: actor, Online: s.online(ws, actor)}, nil
 }
 
 // render executes a template for the caller and also reports who the caller

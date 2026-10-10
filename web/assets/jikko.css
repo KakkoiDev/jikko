@@ -70,3 +70,46 @@
 .jk-sides pre { font-size: 0.8rem; white-space: pre-wrap; background: var(--muted, #f3f4f6); padding: 0.5rem; border-radius: 0.375rem; min-height: 2rem; }
 .jk-upload { margin-top: 1.5rem; }
 .jk-upload .input { max-width: 24rem; }
+
+/* Workspace home: list with a "who is here" rail. */
+.jk-home { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
+.jk-home > .jk-here { order: -1; } /* on one column, who is here comes first */
+@media (min-width: 60rem) { .jk-home { grid-template-columns: minmax(0, 1fr) 18rem; } .jk-home > .jk-here { order: 0; } }
+.jk-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+.jk-toolbar .input { max-width: 18rem; }
+.jk-filters .btn[aria-current="true"] { background: var(--foreground, #111827); color: var(--background, #fff); }
+.jk-card { display: flex; gap: 0.75rem; align-items: flex-start; }
+.jk-card h3 { font-weight: 600; }
+.jk-card .jk-meta { display: flex; flex-wrap: wrap; gap: 0.35rem 0.5rem; align-items: center; font-size: 0.8rem; margin-top: 0.25rem; }
+.jk-kind { display: inline-block; min-width: 1.6rem; text-align: center; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.15rem 0.35rem; border-radius: 0.35rem; background: var(--muted, #f3f4f6); color: var(--muted-foreground, #6b7280); }
+.jk-kind[data-kind="task"] { background: #dbeafe; color: #1d4ed8; }
+.jk-kind[data-kind="identity"] { background: #ede9fe; color: #6d28d9; }
+.jk-kind[data-kind="view"] { background: #fef3c7; color: #b45309; }
+.jk-status { display: inline-block; font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: 999px; border: 1px solid var(--border, #d1d5db); }
+.jk-status[data-status="todo"] { border-color: #9ca3af; }
+.jk-status[data-status="doing"] { background: #dbeafe; border-color: #60a5fa; color: #1e3a8a; }
+.jk-status[data-status="blocked"] { background: #fee2e2; border-color: #f87171; color: #7f1d1d; }
+.jk-status[data-status="done"] { background: #dcfce7; border-color: #4ade80; color: #14532d; }
+.jk-dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 999px; background: #9ca3af; vertical-align: middle; margin-right: 0.3rem; }
+.jk-dot[data-state="working"] { background: #22c55e; box-shadow: 0 0 0 3px #bbf7d0; }
+.jk-dot[data-state="idle"] { background: #f59e0b; }
+.jk-dot[data-state="browsing"] { background: #3b82f6; }
+.jk-dot[data-state="offline"] { background: #9ca3af; }
+.jk-here h3 { font-weight: 600; margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: baseline; }
+.jk-here ul { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.jk-here li { border: 1px solid var(--border, #e5e7eb); border-radius: 0.5rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; }
+.jk-here li[data-online="false"] { opacity: 0.6; }
+.jk-here li a.jk-who { font-weight: 600; text-decoration: none; }
+.jk-here li a.jk-who:hover { text-decoration: underline; }
+.jk-here .jk-doing { display: block; color: var(--muted-foreground, #6b7280); margin-top: 0.15rem; }
+.jk-activity { margin-top: 1.5rem; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
+.jk-activity > section { border: 1px solid var(--border, #e5e7eb); border-radius: 0.5rem; padding: 0.75rem; font-size: 0.875rem; }
+.jk-activity h3 { font-weight: 600; margin-bottom: 0.5rem; }
+.jk-activity ul { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+.jk-activity li { overflow-wrap: anywhere; }
+.jk-activity code { font-size: 0.8em; background: var(--muted, #f3f4f6); padding: 0.05em 0.3em; border-radius: 0.25rem; }
+.jk-now { font-size: 1rem; }
+.jk-now .jk-doing { display: block; color: var(--muted-foreground, #6b7280); }
+.jk-assignees { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+.jk-assignees a { display: inline-flex; align-items: center; gap: 0.25rem; border: 1px solid var(--border, #e5e7eb); border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.8rem; text-decoration: none; }
+.jk-empty { color: var(--muted-foreground, #6b7280); }

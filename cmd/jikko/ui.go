@@ -20,7 +20,10 @@ import (
 	"strings"
 	"time"
 
+	"encoding/hex"
 	jikko "github.com/KakkoiDev/jikko"
+	jikkoweb "github.com/KakkoiDev/jikko/web"
+	"io/fs"
 )
 
 const (
@@ -32,7 +35,32 @@ const (
 	maxFormBody = 8 << 20
 )
 
+// assetVersions fingerprints the embedded assets so a new binary never serves
+// a page against a browser-cached stylesheet or script from the old one.
+var assetVersions = func() map[string]string {
+	out := map[string]string{}
+	entries, err := fs.ReadDir(jikkoweb.Assets, "assets")
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		data, err := fs.ReadFile(jikkoweb.Assets, "assets/"+e.Name())
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(data)
+		out[e.Name()] = hex.EncodeToString(sum[:4])
+	}
+	return out
+}()
+
 var templateFuncs = template.FuncMap{
+	"asset": func(name string) string {
+		if v, ok := assetVersions[name]; ok {
+			return "/assets/" + name + "?v=" + v
+		}
+		return "/assets/" + name
+	},
 	"pageURL":    func(p string) string { return jikko.DefaultLinks.Page(p) },
 	"editURL":    func(p string) string { return "/edit/" + escapedPath(p) },
 	"saveURL":    func(p string) string { return "/save/" + escapedPath(p) },
@@ -40,6 +68,22 @@ var templateFuncs = template.FuncMap{
 	"uploadURL":  func(p string) string { return "/upload/" + escapedPath(p) },
 	"liveURL": func(p, rev, mode string) string {
 		return "/events/page/" + escapedPath(p) + "?" + url.Values{"rev": {rev}, "mode": {mode}}.Encode()
+	},
+	"activityURL": func(p string) string { return "/events/activity/" + escapedPath(p) },
+	"stem":        func(p string) string { return strings.TrimSuffix(p, ".md") },
+	"metaString": func(p *jikko.Page, key string) string {
+		switch v := p.Metadata[key].(type) {
+		case nil:
+			return ""
+		case []any:
+			parts := make([]string, 0, len(v))
+			for _, x := range v {
+				parts = append(parts, fmt.Sprint(x))
+			}
+			return strings.Join(parts, ", ")
+		default:
+			return fmt.Sprint(v)
+		}
 	},
 	"short": func(rev string) string {
 		if len(rev) > 12 {
@@ -163,6 +207,11 @@ type detailView struct {
 	Backlinks              []*jikko.Page
 	View                   *jikko.ViewResult
 	CanWrite, CanComment   bool
+	// Activity is set for identity pages: presence, queue, comments, commits.
+	Activity *activityView
+	// Assignees is set for tasks: who is responsible, with their presence.
+	Assignees []presenceView
+	Status    string
 }
 
 type notice struct{ Kind, Message string }
@@ -251,7 +300,88 @@ func (s *server) detail(ws *jikko.Workspace, actor string, p *jikko.Page) *detai
 			d.Notices = append(d.Notices, notice{"warning", warning.Message})
 		}
 	}
+	switch p.Kind {
+	case jikko.Identity:
+		d.Activity = s.activity(ws, actor, p)
+	case jikko.Task:
+		d.Status = strings.TrimSpace(fmt.Sprint(p.Metadata["status"]))
+		if d.Status == "<nil>" {
+			d.Status = ""
+		}
+		for _, a := range assignees(p) {
+			who, ok := ws.ResolveIdentity(a)
+			if !ok || !ws.Allowed(actor, who, jikko.Read) {
+				continue
+			}
+			ref := strings.TrimSuffix(who.Path, ".md")
+			row := presenceView{Ref: ref, Name: who.Title, URL: jikko.DefaultLinks.Page(who.Path), Kind: "person", State: "offline"}
+			if pr, found := ws.PresenceOf(ref); found {
+				row = presenceRow(ws, actor, who, &pr)
+			} else if _, live := s.sessions.active()[ref]; live {
+				row.Online, row.State = true, "browsing"
+			}
+			if len(who.Members) != 0 {
+				row.Kind = "group"
+				row.State = "group"
+			}
+			d.Assignees = append(d.Assignees, row)
+		}
+	}
 	return d
+}
+
+// activityEvents re-renders an identity's activity panel while the page is
+// open, so presence and progress show up without a reload.
+func (s *server) activityEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, release, ok := s.openStream(w)
+	if !ok {
+		return
+	}
+	defer release()
+	render := func() (string, string, bool) {
+		ws, err := s.cache.load()
+		if err != nil {
+			return "", "", false
+		}
+		actor := s.actor(r, ws, false)
+		pages, err := ws.ReadMany(actor, r.PathValue("path"))
+		if err != nil || pages[0].Kind != jikko.Identity {
+			return "", actor, false
+		}
+		var b bytes.Buffer
+		if err := s.tmpl.ExecuteTemplate(&b, "activity", s.activity(ws, actor, pages[0])); err != nil {
+			return "", actor, false
+		}
+		return b.String(), actor, true
+	}
+	previous, actor, ok := render()
+	if !ok {
+		return
+	}
+	expiry := time.After(streamMaxAge)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-expiry:
+			return
+		case <-ticker.C:
+		}
+		current, now, ok := render()
+		if !ok || now != actor {
+			return
+		}
+		if current == previous {
+			continue
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", sseData(current)); err != nil {
+			return
+		}
+		flusher.Flush()
+		previous = current
+	}
 }
 
 // editFor builds the edit form showing shown, an edit of base at rev.
@@ -292,6 +422,11 @@ func isHTMX(r *http.Request) bool { return r.Header.Get("HX-Request") == "true" 
 // respond renders data with the given status: the whole page for an
 // ordinary request, or only the #page section for an HTMX swap.
 func (s *server) respond(w http.ResponseWriter, r *http.Request, status int, data pageData) {
+	if data.Online == nil {
+		if ws, err := s.cache.load(); err == nil {
+			data.Online = s.online(ws, data.Actor)
+		}
+	}
 	name := "page"
 	if isHTMX(r) {
 		switch {

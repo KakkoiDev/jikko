@@ -4,37 +4,53 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{if .Detail}}{{.Detail.Title}} · {{else if .Edit}}Editing {{.Edit.Title}} · {{end}}Jikko</title>
-<link rel="stylesheet" href="/assets/basecoat.min.css">
-<link rel="stylesheet" href="/assets/jikko.css">
-<script src="/assets/htmx.min.js"></script>
-<script src="/assets/jikko.js" defer></script>
+<link rel="stylesheet" href="{{asset "basecoat.min.css"}}">
+<link rel="stylesheet" href="{{asset "jikko.css"}}">
+<script src="{{asset "htmx.min.js"}}"></script>
+<script src="{{asset "jikko.js"}}" defer></script>
 </head>
 <body class="bg-background text-foreground">
 <main class="jk-main">
 <header class="jk-top">
 <div><h1 class="jk-brand"><a href="/">Jikko</a></h1><p class="jk-muted">Structured work in plain Markdown.</p></div>
-{{if .Actor}}<form method="post" action="/logout" class="jk-inline"><input type="hidden" name="_csrf" value="{{.CSRF}}"><span class="jk-actor">{{.Actor}}</span> <button class="btn" data-variant="outline">Log out</button></form>
+{{if .Actor}}<form method="post" action="/logout" class="jk-inline"><input type="hidden" name="_csrf" value="{{.CSRF}}"><span class="jk-actor"><span class="jk-dot" data-state="browsing"></span>{{.Actor}}</span> <button class="btn" data-variant="outline">Log out</button></form>
 {{else}}<form method="post" action="/login" class="jk-inline"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input class="input" name="token" type="password" placeholder="Token" aria-label="Token" required><button class="btn">Log in</button></form>{{end}}
 </header>
-{{if .Detail}}{{template "detail" .}}{{else if .Edit}}{{template "edit" .}}{{else if .Message}}{{template "message" .}}{{else}}<nav class="jk-filters"><button class="btn" data-variant="outline" hx-get="/pages" hx-target="#pages" hx-swap="outerHTML">All</button><button class="btn" data-variant="outline" hx-get="/pages?type=task" hx-target="#pages" hx-swap="outerHTML">Tasks</button><button class="btn" data-variant="outline" hx-get="/pages?type=view" hx-target="#pages" hx-swap="outerHTML">Views</button><button class="btn" data-variant="outline" hx-get="/pages?type=identity" hx-target="#pages" hx-swap="outerHTML">Identities</button></nav>
+{{if .Detail}}{{template "detail" .}}{{else if .Edit}}{{template "edit" .}}{{else if .Message}}{{template "message" .}}{{else}}<div class="jk-toolbar"><input class="input" id="jk-search" type="search" placeholder="Filter pages…" aria-label="Filter pages"><nav class="jk-filters" aria-label="Page types"><button class="btn" data-variant="outline" aria-current="{{if eq .Query ""}}true{{else}}false{{end}}" hx-get="/pages" hx-target="#pages" hx-swap="outerHTML">All</button><button class="btn" data-variant="outline" aria-current="{{if eq .Query "?type=task"}}true{{else}}false{{end}}" hx-get="/pages?type=task" hx-target="#pages" hx-swap="outerHTML">Tasks</button><button class="btn" data-variant="outline" aria-current="{{if eq .Query "?type=document"}}true{{else}}false{{end}}" hx-get="/pages?type=document" hx-target="#pages" hx-swap="outerHTML">Documents</button><button class="btn" data-variant="outline" aria-current="{{if eq .Query "?type=view"}}true{{else}}false{{end}}" hx-get="/pages?type=view" hx-target="#pages" hx-swap="outerHTML">Views</button><button class="btn" data-variant="outline" aria-current="{{if eq .Query "?type=identity"}}true{{else}}false{{end}}" hx-get="/pages?type=identity" hx-target="#pages" hx-swap="outerHTML">Identities</button></nav></div>
 {{template "pages" .}}{{end}}
 </main>
 </body>
 </html>{{end}}
 
-{{define "pages"}}<section id="pages" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML"><div class="item-group">{{range .Pages}}<article class="item" data-variant="outline"><section><h3><a href="{{pageURL .Path}}">{{.Title}}</a></h3><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.</p></section></article>{{end}}</div></section>{{end}}
+{{define "pages"}}<section id="pages" class="jk-home" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML">
+<div class="item-group">{{range .Pages}}<article class="item jk-card" data-variant="outline" data-kind="{{.Kind}}"><span class="jk-kind" data-kind="{{.Kind}}">{{.Kind}}</span><section><h3><a href="{{pageURL .Path}}">{{.Title}}</a></h3><p class="jk-meta"><span class="jk-muted">{{.Path}}</span>{{if eq (printf "%s" .Kind) "task"}}{{with metaString . "status"}}<span class="jk-status" data-status="{{.}}">{{.}}</span>{{end}}{{with metaString . "assignee"}}<span class="jk-muted">→ {{.}}</span>{{end}}{{with metaString . "due"}}<span class="jk-muted">due {{.}}</span>{{end}}{{end}}{{if eq (printf "%s" .Kind) "identity"}}{{if .Members}}<span class="jk-muted">group of {{len .Members}}</span>{{end}}{{end}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.</p></section></article>{{end}}</div>
+{{template "here" .}}
+</section>{{end}}
+
+{{define "here"}}<aside class="jk-here" aria-label="Who is here"><h3>Who's here <span class="jk-muted">{{len .Online}}</span></h3>
+<ul>{{range .Online}}<li data-online="{{.Online}}"><span class="jk-dot" data-state="{{.State}}" title="{{.State}}"></span><a class="jk-who" href="{{.URL}}">{{.Name}}</a> <span class="jk-muted">{{.State}}</span>
+{{if and .Online (eq .State "working")}}<span class="jk-doing">{{if .TaskURL}}<a href="{{.TaskURL}}">{{.TaskTitle}}</a>{{else}}{{.Task}}{{end}} · {{.Since}}</span>{{else if eq .State "browsing"}}<span class="jk-doing">active {{.Seen}}</span>{{else if .LastTask}}<span class="jk-doing">last: {{if .LastTaskURL}}<a href="{{.LastTaskURL}}">{{.LastTaskTitle}}</a>{{else}}{{.LastTask}}{{end}} · {{.LastOutcome}} · {{.LastFinished}}</span>{{end}}</li>{{else}}<li class="jk-empty">Nobody right now. Start an agent with <code>jikko identity &lt;name&gt; start</code>.</li>{{end}}</ul></aside>{{end}}
 
 {{define "message"}}<section id="page" class="jk-page"><div class="alert" data-variant="destructive" role="alert"><section><p>{{.Message}}</p></section></div><p><a href="/">Back to the workspace</a></p></section>{{end}}
 
 {{define "flash"}}{{if .Flash}}<div class="alert jk-flash" role="status"><section><p>{{.Flash}}</p></section></div>{{end}}{{if .Error}}<div class="alert jk-flash" data-variant="destructive" role="alert"><section><p>{{.Error}}</p></section></div>{{end}}{{end}}
 
+{{define "activity"}}<section id="jk-activity" class="jk-activity" hx-sse:connect="{{activityURL .Now.Ref}}" hx-swap="outerHTML">
+<section><h3>Now</h3>{{with .Now}}<p class="jk-now"><span class="jk-dot" data-state="{{.State}}"></span>{{if .Online}}{{.State}}{{if eq .State "working"}} for {{.Since}}{{else}} since {{.Since}}{{end}}{{else}}offline · last seen {{.Seen}}{{end}}
+{{if and .Online (eq .State "working")}}<span class="jk-doing">on {{if .TaskURL}}<a href="{{.TaskURL}}">{{.TaskTitle}}</a>{{else}}{{.Task}}{{end}}{{if .Workdir}} in <code>{{.Workdir}}</code>{{end}}</span>{{else if .LastTask}}<span class="jk-doing">last: {{if .LastTaskURL}}<a href="{{.LastTaskURL}}">{{.LastTaskTitle}}</a>{{else}}{{.LastTask}}{{end}} · {{.LastOutcome}} · {{.LastFinished}}</span>{{end}}</p>{{else}}<p class="jk-empty">Not running as an agent.</p>{{end}}</section>
+<section><h3>Queue</h3>{{if .Queue}}<ul>{{range .Queue}}<li><a href="{{pageURL .Path}}">{{.Title}}</a></li>{{end}}</ul>{{else}}<p class="jk-empty">No todo tasks assigned.</p>{{end}}</section>
+<section><h3>Recent comments</h3>{{if .Comments}}<ul>{{range .Comments}}<li><a href="{{.URL}}">{{.Title}}</a> <span class="jk-muted">{{.ID}}</span><br>{{.Text}}</li>{{end}}</ul>{{else}}<p class="jk-empty">None yet.</p>{{end}}</section>
+<section><h3>Commits</h3>{{if .Commits}}<ul>{{range .Commits}}<li><code>{{.Short}}</code> {{.Subject}} <span class="jk-muted">{{.Operation}} · {{.Ago}}</span></li>{{end}}</ul>{{else}}<p class="jk-empty">None yet.</p>{{end}}</section>
+</section>{{end}}
+
 {{define "detail"}}{{with .Detail}}<section id="page" class="jk-page" data-path="{{.Path}}" data-rev="{{.Rev}}">
 {{template "flash" $}}
 <div id="jk-live" hx-sse:connect="{{liveURL .Path .Rev "view"}}" hx-swap="outerHTML"></div>
 <header class="jk-page-head">
-<div><p class="jk-muted">{{.Kind}} · {{.Path}}</p><h2 class="jk-title">{{.Title}}</h2></div>
+<div><p class="jk-muted"><span class="jk-kind" data-kind="{{.Kind}}">{{.Kind}}</span> {{.Path}}{{if .Status}} <span class="jk-status" data-status="{{.Status}}">{{.Status}}</span>{{end}}</p><h2 class="jk-title">{{.Title}}</h2></div>
 {{if .CanWrite}}<nav class="jk-actions"><a class="btn" href="{{editURL .Path}}">Edit</a> <a class="btn" data-variant="outline" href="{{editURL .Path}}?mode=source">Edit source</a></nav>{{end}}
 </header>
+{{if .Assignees}}<div class="jk-assignees">{{range .Assignees}}<a href="{{.URL}}" title="{{.State}}"><span class="jk-dot" data-state="{{.State}}"></span>{{.Name}}{{if and .Online (eq .State "working")}} · working{{if .Task}} on {{.TaskTitle}}{{end}}{{else if eq .State "idle"}} · idle{{else if eq .State "browsing"}} · here{{end}}</a>{{end}}</div>{{end}}
 {{if .Fields}}<dl class="jk-fields">{{range .Fields}}<div><dt>{{.Key}}</dt><dd>{{if .Editable}}{{.Value}}{{else}}<pre>{{.Value}}</pre>{{end}}</dd></div>{{end}}</dl>{{end}}
 {{range .Notices}}<p class="jk-notice" data-kind="{{.Kind}}">{{.Message}}</p>{{end}}
 {{if .View}}<div class="jk-view">{{template "viewresult" .View}}</div>{{else}}<div class="jk-columns">
@@ -60,6 +76,7 @@
 </form>{{else if not $.Actor}}<p class="jk-muted">Log in to take part.</p>{{end}}
 </aside>
 </div>{{end}}
+{{if .Activity}}{{template "activity" .Activity}}{{end}}
 {{if and .CanWrite (not .View)}}<form method="post" action="{{uploadURL .Path}}" hx-post="{{uploadURL .Path}}" hx-target="#page" hx-swap="outerHTML" enctype="multipart/form-data" class="jk-row jk-upload"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><label class="label" for="jk-file">Attach a file</label><input class="input" id="jk-file" type="file" name="file" required><button class="btn" data-variant="outline">Upload and embed</button></form>{{end}}
 {{if .Backlinks}}<footer class="jk-backlinks"><h3>Linked from</h3><ul>{{range .Backlinks}}<li><a href="{{pageURL .Path}}">{{.Title}}</a></li>{{end}}</ul></footer>{{end}}
 </section>{{end}}{{end}}
