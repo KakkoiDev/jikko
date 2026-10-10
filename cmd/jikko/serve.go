@@ -2,9 +2,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -95,79 +93,14 @@ func treeStamp(dir string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// sessionStore exchanges a permanent bearer token for a short-lived browser
-// session, so the token itself is never stored in a cookie or replayed on
-// every request. Each session remembers the credential it was created from,
-// so revoking that credential ends the session too.
-type sessionStore struct {
-	mu sync.Mutex
-	m  map[string]sessionEntry
-}
-
-type sessionEntry struct {
-	identity   string
-	credential string
-	expires    time.Time
-}
-
-func newSessionStore() *sessionStore { return &sessionStore{m: map[string]sessionEntry{}} }
-
-func (s *sessionStore) create(identity, credential string) (string, error) {
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
-	id := base64.RawURLEncoding.EncodeToString(raw)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := time.Now()
-	for k, v := range s.m {
-		if now.After(v.expires) {
-			delete(s.m, k)
-		}
-	}
-	s.m[id] = sessionEntry{identity: identity, credential: credential, expires: now.Add(sessionTTL)}
-	return id, nil
-}
-
-// lookup returns a live session without extending it.
-func (s *sessionStore) lookup(id string) (sessionEntry, bool) {
-	if id == "" {
-		return sessionEntry{}, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.m[id]
-	if !ok || time.Now().After(e.expires) {
-		delete(s.m, id)
-		return sessionEntry{}, false
-	}
-	return e, true
-}
-
-// touch slides a live session's expiry forward.
-func (s *sessionStore) touch(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if e, ok := s.m[id]; ok && !time.Now().After(e.expires) {
-		e.expires = time.Now().Add(sessionTTL)
-		s.m[id] = e
-	}
-}
-
-func (s *sessionStore) drop(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.m, id)
-}
-
 type server struct {
 	cache      *cache
 	sessions   *sessionStore
 	tmpl       *template.Template
 	trustProxy bool
 	streams    chan struct{}
-	// csrfKey signs the anti-forgery tokens of this process's forms.
+	// csrfKey signs the anti-forgery tokens of the forms. It is stored under
+	// .data so a restart does not invalidate forms already open.
 	csrfKey []byte
 	// maxUpload is the maximum size of an uploaded file.
 	maxUpload int64
@@ -177,8 +110,13 @@ type server struct {
 // shown are set.
 type pageData struct {
 	Pages []*jikko.Page
+	// Total counts the pages of the workspace, readable or not, so an
+	// empty workspace can be told from one the caller may not read.
+	Total int
 	Query string
 	Actor string
+	// Status is the HTTP status of a message page.
+	Status int
 	// CSRF is the anti-forgery token every form posts back.
 	CSRF    string
 	Flash   string
@@ -227,17 +165,13 @@ func serve(args []string) error {
 }
 
 func newServer(root string, trustProxy bool) *server {
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		panic(err)
-	}
 	return &server{
 		cache:      &cache{dir: root},
-		sessions:   newSessionStore(),
+		sessions:   openSessionStore(root),
 		tmpl:       template.Must(template.New("jikko").Funcs(templateFuncs).ParseFS(jikkoweb.Templates, "templates/*.html")),
 		trustProxy: trustProxy,
 		streams:    make(chan struct{}, maxStreams),
-		csrfKey:    key,
+		csrfKey:    loadKey(root),
 		maxUpload:  jikko.DefaultMaxUpload,
 	}
 }
@@ -287,7 +221,25 @@ func securityHeaders(next http.Handler) http.Handler {
 // take the workspace offline.
 func (s *server) fail(w http.ResponseWriter, err error) {
 	log.Printf("request failed: %v", err)
-	http.Error(w, "the workspace could not be read; see the server log", http.StatusServiceUnavailable)
+	s.plainOrPage(w, nil, http.StatusServiceUnavailable, "The workspace could not be read; see the server log.")
+}
+
+// plainOrPage answers with a styled message page, or with plain text when
+// the page itself cannot be rendered or the request is not for a page.
+func (s *server) plainOrPage(w http.ResponseWriter, r *http.Request, status int, message string) {
+	name := "page"
+	if r != nil && isHTMX(r) {
+		name = "message"
+	}
+	var b bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&b, name, pageData{Status: status, Message: message}); err != nil {
+		http.Error(w, message, status)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write(b.Bytes())
 }
 
 // actor identifies the caller from a bearer token or a browser session.
@@ -349,7 +301,7 @@ func (s *server) data(r *http.Request, extend bool) (pageData, error) {
 		query = "?" + encoded
 	}
 	actor := s.actor(r, ws, extend)
-	return pageData{Pages: visiblePages(ws, actor, ws.List(kind, q.Get("status"))), Query: query, Actor: actor}, nil
+	return pageData{Pages: visiblePages(ws, actor, ws.List(kind, q.Get("status"))), Total: len(ws.Pages), Query: query, Actor: actor}, nil
 }
 
 // render executes a template for the caller and also reports who the caller
@@ -373,7 +325,7 @@ func (s *server) renderCSRF(name string, r *http.Request, extend bool, csrf stri
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
-		http.NotFound(w, r)
+		s.plainOrPage(w, r, http.StatusNotFound, "There is nothing at this address.")
 		return
 	}
 	out, _, err := s.renderCSRF("page", r, true, s.csrfFor(w, r))
@@ -397,7 +349,7 @@ func (s *server) pages(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		s.plainOrPage(w, r, http.StatusMethodNotAllowed, "Log in with the form at the top of the workspace page.")
 		return
 	}
 	// A token is a few dozen bytes; there is no reason to buffer megabytes of
@@ -414,7 +366,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	p, credential, err := ws.AuthenticateCredential(r.FormValue("token"))
 	if err != nil {
 		log.Printf("login rejected: %v", err)
-		http.Error(w, "authentication failed", http.StatusUnauthorized)
+		s.refuse(w, r, http.StatusUnauthorized, "", "That token was not accepted. Check that it was pasted whole and that its identity still exists.")
 		return
 	}
 	id, err := s.sessions.create(strings.TrimSuffix(p.Path, ".md"), credential)
@@ -428,7 +380,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		s.plainOrPage(w, r, http.StatusMethodNotAllowed, "Log out with the button at the top of the workspace page.")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)

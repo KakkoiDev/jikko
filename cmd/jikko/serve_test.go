@@ -160,7 +160,7 @@ func TestSessionExpiry(t *testing.T) {
 		t.Fatalf("fresh session = %#v %v", e, ok)
 	}
 	s.mu.Lock()
-	s.m[id] = sessionEntry{identity: "alice", expires: time.Now().Add(-time.Second)}
+	s.m[sessionHash(id)] = sessionEntry{identity: "alice", expires: time.Now().Add(-time.Second)}
 	s.mu.Unlock()
 	s.touch(id)
 	if _, ok := s.lookup(id); ok {
@@ -178,9 +178,9 @@ func TestSessionExpiry(t *testing.T) {
 	// lookup leaves the expiry alone; touch slides it.
 	id3, _ := s.create("carol", "cred")
 	s.mu.Lock()
-	e := s.m[id3]
+	e := s.m[sessionHash(id3)]
 	e.expires = time.Now().Add(time.Minute)
-	s.m[id3] = e
+	s.m[sessionHash(id3)] = e
 	s.mu.Unlock()
 	if got, _ := s.lookup(id3); !got.expires.Equal(e.expires) {
 		t.Fatal("lookup extended the session")
@@ -828,5 +828,49 @@ func TestPageNeedsNoInlineCode(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The signing key and the session table live under .data, so a restart
+// neither logs anyone out nor invalidates a form that was open.
+func TestSessionsAndFormsSurviveARestart(t *testing.T) {
+	s, h, dir, token := teamServer(t)
+	c := loggedIn(t, h, token)
+	form, _ := formToken(t, h, []*http.Cookie{c})
+
+	for _, name := range []string{keyFile, sessionsFile} {
+		info, err := os.Stat(filepath.Join(dir, dataDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("%s mode = %o", name, info.Mode().Perm())
+		}
+	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, dataDir, sessionsFile)); strings.Contains(string(raw), c.Value) {
+		t.Fatal("session id stored in clear")
+	}
+	if info, err := os.Stat(filepath.Join(dir, dataDir)); err != nil || info.Mode().Perm() != 0700 {
+		t.Fatalf(".data = %v %v", info, err)
+	}
+
+	again := newServer(dir, false)
+	h2 := again.routes()
+	if !strings.Contains(getWith(h2, "/pages", func(r *http.Request) { r.AddCookie(c) }).Body.String(), "Secret") {
+		t.Fatal("session did not survive the restart")
+	}
+	r := httptest.NewRequest(http.MethodPost, "/logout", strings.NewReader(url.Values{"_csrf": {form}}.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.AddCookie(c)
+	rec := httptest.NewRecorder()
+	h2.ServeHTTP(rec, r)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("form signed before the restart = %d", rec.Code)
+	}
+	if _, ok := s.sessions.lookup(c.Value); !ok {
+		t.Fatal("the old process should still hold the session until it reloads")
+	}
+	if _, ok := openSessionStore(dir).lookup(c.Value); ok {
+		t.Fatal("logout was not persisted")
 	}
 }

@@ -5,6 +5,14 @@
 .jk-brand a { color: inherit; text-decoration: none; }
 .jk-muted, .text-muted-foreground { color: var(--muted-foreground, #6b7280); }
 .jk-inline { display: flex; gap: 0.5rem; align-items: center; }
+.jk-login { display: flex; flex-direction: column; gap: 0.25rem; align-items: flex-end; }
+.jk-help { font-size: 0.8rem; color: var(--muted-foreground, #6b7280); }
+.jk-help code, .jk-guide code, .jk-message code { font-size: 0.85em; background: var(--muted, #f3f4f6); padding: 0.1em 0.3em; border-radius: 0.25rem; }
+.jk-message h2 { font-weight: 600; font-size: 1.1rem; margin-bottom: 0.25rem; }
+.jk-message p, .jk-guide p { margin-bottom: 0.75rem; max-width: 48rem; }
+.jk-guide ol { list-style: decimal; padding-left: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem; max-width: 48rem; }
+.jk-guide pre { background: var(--muted, #f3f4f6); padding: 0.5rem 0.75rem; border-radius: 0.5rem; margin: 0.5rem 0; }
+.jk-guide pre code { background: none; padding: 0; }
 .jk-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
 .jk-stack { display: flex; flex-direction: column; gap: 0.5rem; }
 .jk-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }

@@ -41,6 +41,25 @@ var templateFuncs = template.FuncMap{
 	"liveURL": func(p, rev, mode string) string {
 		return "/events/page/" + escapedPath(p) + "?" + url.Values{"rev": {rev}, "mode": {mode}}.Encode()
 	},
+	"statusTitle": func(status int) string {
+		switch status {
+		case http.StatusUnauthorized:
+			return "Log in to continue"
+		case http.StatusForbidden:
+			return "Not allowed"
+		case http.StatusNotFound:
+			return "Not found"
+		case http.StatusMethodNotAllowed:
+			return "Wrong kind of request"
+		case http.StatusRequestEntityTooLarge:
+			return "Too large"
+		case http.StatusServiceUnavailable:
+			return "Workspace unavailable"
+		case 0, http.StatusOK:
+			return "Notice"
+		}
+		return http.StatusText(status)
+	},
 	"short": func(rev string) string {
 		if len(rev) > 12 {
 			return rev[:12]
@@ -138,14 +157,14 @@ func (s *server) validCSRF(r *http.Request) bool {
 // a valid anti-forgery token. It answers the request itself when it refuses.
 func (s *server) postAllowed(w http.ResponseWriter, r *http.Request) bool {
 	if !sameOrigin(r) {
-		http.Error(w, "cross-site request rejected", http.StatusForbidden)
+		s.plainOrPage(w, r, http.StatusForbidden, "This request came from another site and was not carried out.")
 		return false
 	}
 	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 		return true
 	}
 	if !s.validCSRF(r) {
-		http.Error(w, "missing or invalid anti-forgery token; reload the page and try again", http.StatusForbidden)
+		s.plainOrPage(w, r, http.StatusForbidden, "The form's anti-forgery token was missing or no longer valid, so nothing was changed. This happens when a session ends while a page is open.")
 		return false
 	}
 	return true
@@ -316,7 +335,7 @@ func (s *server) respond(w http.ResponseWriter, r *http.Request, status int, dat
 
 // refuse answers with a message page.
 func (s *server) refuse(w http.ResponseWriter, r *http.Request, status int, actor, message string) {
-	s.respond(w, r, status, pageData{Actor: actor, CSRF: s.csrfFor(w, r), Message: message})
+	s.respond(w, r, status, pageData{Actor: actor, CSRF: s.csrfFor(w, r), Status: status, Message: message})
 }
 
 const (
@@ -373,7 +392,7 @@ func (s *server) mutationContextLimit(w http.ResponseWriter, r *http.Request, li
 	if r.ContentLength > limit {
 		// Say so before the form is parsed: a body cut short by the limit
 		// would otherwise read as a missing anti-forgery token.
-		http.Error(w, fmt.Sprintf("the request is larger than the %d bytes accepted here", limit), http.StatusRequestEntityTooLarge)
+		s.plainOrPage(w, r, http.StatusRequestEntityTooLarge, fmt.Sprintf("The request is larger than the %d bytes accepted here, so nothing was changed.", limit))
 		return nil, "", false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, limit)

@@ -14,17 +14,42 @@
 <header class="jk-top">
 <div><h1 class="jk-brand"><a href="/">Jikko</a></h1><p class="jk-muted">Structured work in plain Markdown.</p></div>
 {{if .Actor}}<form method="post" action="/logout" class="jk-inline"><input type="hidden" name="_csrf" value="{{.CSRF}}"><span class="jk-actor">{{.Actor}}</span> <button class="btn" data-variant="outline">Log out</button></form>
-{{else}}<form method="post" action="/login" class="jk-inline"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input class="input" name="token" type="password" placeholder="Token" aria-label="Token" required><button class="btn">Log in</button></form>{{end}}
+{{else}}<div class="jk-login"><form method="post" action="/login" class="jk-inline"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input class="input" name="token" type="password" placeholder="Token" aria-label="Token" required autocomplete="current-password"><button class="btn">Log in</button></form><p class="jk-help">No token yet? On the host, run <code>jikko auth create &lt;you&gt;</code> and paste the token it prints.</p></div>{{end}}
 </header>
-{{if .Detail}}{{template "detail" .}}{{else if .Edit}}{{template "edit" .}}{{else if .Message}}{{template "message" .}}{{else}}<nav class="jk-filters"><button class="btn" data-variant="outline" hx-get="/pages" hx-target="#pages" hx-swap="outerHTML">All</button><button class="btn" data-variant="outline" hx-get="/pages?type=task" hx-target="#pages" hx-swap="outerHTML">Tasks</button><button class="btn" data-variant="outline" hx-get="/pages?type=view" hx-target="#pages" hx-swap="outerHTML">Views</button><button class="btn" data-variant="outline" hx-get="/pages?type=identity" hx-target="#pages" hx-swap="outerHTML">Identities</button></nav>
+{{if .Detail}}{{template "detail" .}}{{else if .Edit}}{{template "edit" .}}{{else if .Message}}{{template "message" .}}{{else if eq .Total 0}}{{template "guide" .}}{{else}}<nav class="jk-filters"><button class="btn" data-variant="outline" hx-get="/pages" hx-target="#pages" hx-swap="outerHTML">All</button><button class="btn" data-variant="outline" hx-get="/pages?type=task" hx-target="#pages" hx-swap="outerHTML">Tasks</button><button class="btn" data-variant="outline" hx-get="/pages?type=view" hx-target="#pages" hx-swap="outerHTML">Views</button><button class="btn" data-variant="outline" hx-get="/pages?type=identity" hx-target="#pages" hx-swap="outerHTML">Identities</button></nav>
 {{template "pages" .}}{{end}}
 </main>
 </body>
 </html>{{end}}
 
-{{define "pages"}}<section id="pages" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML"><div class="item-group">{{range .Pages}}<article class="item" data-variant="outline"><section><h3><a href="{{pageURL .Path}}">{{.Title}}</a></h3><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.</p></section></article>{{end}}</div></section>{{end}}
+{{define "pages"}}<section id="pages" hx-sse:connect="/events{{.Query}}" hx-swap="outerHTML"><div class="item-group">{{range .Pages}}<article class="item" data-variant="outline"><section><h3><a href="{{pageURL .Path}}">{{.Title}}</a></h3><p class="text-muted-foreground">{{.Kind}} · {{.Path}}</p></section></article>{{else}}<article class="item" data-variant="outline"><section><p>No pages.{{if .Query}} Nothing matches the filter.{{else if not .Actor}} Log in to see pages restricted to identities.{{end}}</p></section></article>{{end}}</div></section>{{end}}
 
-{{define "message"}}<section id="page" class="jk-page"><div class="alert" data-variant="destructive" role="alert"><section><p>{{.Message}}</p></section></div><p><a href="/">Back to the workspace</a></p></section>{{end}}
+{{define "message"}}<section id="page" class="jk-page jk-message">
+<div class="alert" data-variant="destructive" role="alert"><section><h2>{{statusTitle .Status}}</h2><p>{{.Message}}</p></section></div>
+{{if eq .Status 401}}<p>Log in with the form above. No token yet? On the host, run <code>jikko auth create &lt;you&gt;</code> and paste the token it prints.</p>
+{{else if eq .Status 403}}<p>If you were sent here from a form, the page it was on may be stale: go back, reload it, and try again. If you believe you should have access, ask an administrator of the page to grant it with <code>jikko perm</code>.</p>
+{{else if eq .Status 404}}<p>Check the address, or find the page from the workspace list. Pages you may not read look the same as pages that do not exist.</p>
+{{else if eq .Status 413}}<p>Make the request smaller, or ask the host to raise the limit (<code>jikko serve --max-upload</code> for uploads).</p>
+{{else if eq .Status 503}}<p>The server could not read its workspace directory. The detail is in the server log on the host; the server keeps running and will serve the workspace once it is readable again.</p>{{end}}
+<nav class="jk-actions"><a class="btn" data-variant="outline" href="/">Back to the workspace</a>{{if .Actor}} <a class="btn" data-variant="ghost" href="/me">For you</a>{{end}}</nav>
+</section>{{end}}
+
+{{define "guide"}}<section id="page" class="jk-page jk-guide">
+<h2 class="jk-title">This workspace is empty</h2>
+<p>Jikko reads Markdown files from the workspace directory on the host; there are none yet. Three steps make it usable:</p>
+<ol>
+<li><strong>Create an identity page for yourself</strong> on the host, so Jikko knows who you are. A file <code>alice.md</code> holding
+<pre class="jk-code"><code>---
+type: identity
+---
+# Alice</code></pre>
+is enough. Groups are identities with a <code>members</code> list.</li>
+<li><strong>Create a token</strong> with <code>jikko auth create alice</code> on the host and paste it into the login form above. Tokens are stored hashed in <code>.auth.md</code>, which stays out of Git.</li>
+<li><strong>Write pages.</strong> Once logged in, <em>New page</em> creates documents, tasks and identities here; on the host, <code>jikko create</code> does the same, and any Markdown file dropped into the directory is a page too. Pages without a <code>permissions</code> mapping are open to everyone; <code>jikko perm</code> restricts them.</li>
+</ol>
+<p class="jk-muted">The list refreshes on its own as files appear.</p>
+<section id="pages" hx-sse:connect="/events" hx-swap="outerHTML"></section>
+</section>{{end}}
 
 {{define "flash"}}{{if .Flash}}<div class="alert jk-flash" role="status"><section><p>{{.Flash}}</p></section></div>{{end}}{{if .Error}}<div class="alert jk-flash" data-variant="destructive" role="alert"><section><p>{{.Error}}</p></section></div>{{end}}{{end}}
 
