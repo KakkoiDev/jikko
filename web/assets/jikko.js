@@ -14,15 +14,15 @@ document.addEventListener("selectionchange", function () {
   if (field && text && text.indexOf("\n") < 0) field.value = text;
 });
 
-// Leaving the page closes its live streams first. The browser would abort
-// their fetches itself a moment later, but htmx then reports the aborted
-// stream as an error on the console; closing them here ends each stream
-// cleanly. The connection record is where the htmx SSE extension keeps it.
-window.addEventListener("pagehide", function () {
-  document.querySelectorAll("[hx-sse\\:connect]").forEach(function (element) {
-    var sse = element._htmx && element._htmx.sse;
-    if (!sse) return;
-    if (sse.abortController && sse.abortController.abort) sse.abortController.abort();
-    if (sse.reader && sse.reader.cancel) sse.reader.cancel();
-  });
+// When a swap removes an element with a live stream (the page list, or the
+// change notice replacing itself), the htmx SSE extension aborts the stream's
+// fetch during its cleanup, and the read it had in flight rejects with an
+// AbortError that nothing awaits. The stream is closed on purpose, so that
+// rejection is noise; everything else still reaches the console.
+window.addEventListener("unhandledrejection", function (event) {
+  var reason = event.reason;
+  if (!reason || reason.name !== "AbortError") return;
+  var stack = String(reason.stack || "");
+  if (stack.indexOf("htmx") < 0 && stack.indexOf("htmx_before_cleanup") < 0) return;
+  event.preventDefault();
 });
