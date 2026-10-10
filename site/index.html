@@ -106,41 +106,19 @@ footer p { margin: 0 0 0.4rem; }
   <h2 id="quickstart">Quickstart</h2>
   <ol class="steps">
     <li>
-      <strong>Make a workspace.</strong> Any folder of Markdown files is one. Give it a page and an identity for yourself.
-<pre><code>mkdir notes &amp;&amp; cd notes
-
-cat &gt; welcome.md &lt;&lt;'EOF'
-# Welcome
-
-The first task is [[tasks/first]]. Questions go to @alice.
-EOF
-
-mkdir -p tasks identity
-cat &gt; tasks/first.md &lt;&lt;'EOF'
----
-type: task
-status: todo
-assignee: alice
----
-
-# Write the plan
-EOF
-
-cat &gt; identity/alice.md &lt;&lt;'EOF'
----
-type: identity
----
-
-# Alice
-EOF
-
-jikko check          <span class="comment"># reports broken references and malformed pages</span>
-jikko list --type task</code></pre>
+      <strong>Make a workspace.</strong> <code>init</code> creates the folder, runs <code>git init</code>, writes your identity page, a welcome page and an <code>open-work</code> view, and prints a bearer token for you once. Only the token's hash is kept, in <code>.auth.md</code>, which <code>init</code> keeps out of Git.
+<pre><code>export JIKKO_TOKEN="$(jikko init --dir my-work --identity alice)"
+cd my-work
+jikko tree</code></pre>
     </li>
     <li>
-      <strong>Create a credential.</strong> Editing, through the CLI or the browser, is done as an identity. <code>auth create</code> prints a bearer token once; only its hash is kept, in <code>.auth.md</code>, which should stay out of Git.
-<pre><code>export JIKKO_TOKEN="$(jikko auth create alice)"
-jikko set tasks/first status doing</code></pre>
+      <strong>Define and track work.</strong> Pages are ordinary Markdown; YAML frontmatter makes a task explicit. <code>--commit</code> records each change as one Git commit attributed to you.
+<pre><code>printf '# Write the plan\n\nQuestions go to @alice.\n' | jikko create tasks/first --type task --file - --commit
+jikko set tasks/first assignee alice --commit
+jikko set tasks/first status doing --commit
+jikko list --assignee me
+jikko check          <span class="comment"># reports broken references and malformed pages</span>
+jikko log</code></pre>
     </li>
     <li>
       <strong>Serve it.</strong> The web interface is embedded in the binary and binds to localhost.
