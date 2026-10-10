@@ -680,3 +680,77 @@ func TestOversizedBodyIsRefusedAsSuch(t *testing.T) {
 		t.Fatalf("oversized upload = %d", rec.Code)
 	}
 }
+
+// The page stream follows the session and the page's policy like the list
+// stream: it never extends the session, it ends when the credential is
+// revoked or the page can no longer be read, sending nothing, and it counts
+// against the connection limit.
+func TestPageEventsFollowSessionAndAccess(t *testing.T) {
+	u := uiWorkspace(t)
+	rev := regexp.MustCompile(`data-rev="([0-9a-f]+)"`).FindStringSubmatch(u.get(t, "dave", "/p/plan.md").Body.String())[1]
+	for i := 0; i < maxStreams; i++ {
+		u.s.streams <- struct{}{}
+	}
+	if rec := u.get(t, "dave", "/events/page/plan.md?rev="+rev); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("stream over the limit = %d", rec.Code)
+	}
+	for i := 0; i < maxStreams; i++ {
+		<-u.s.streams
+	}
+	srv := httptest.NewServer(u.h)
+	defer srv.Close()
+	open := func(who string) *http.Response {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		t.Cleanup(cancel)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/events/page/plan.md?rev="+rev, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.AddCookie(u.cookies[who])
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { resp.Body.Close() })
+		return resp
+	}
+	closedWithout := func(resp *http.Response, what string) {
+		t.Helper()
+		done := make(chan []byte, 1)
+		go func() {
+			b, _ := io.ReadAll(resp.Body)
+			done <- b
+		}()
+		select {
+		case b := <-done:
+			if len(b) != 0 {
+				t.Fatalf("stream sent %q after %s", b, what)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("stream stayed open after %s", what)
+		}
+	}
+	dave, bob := open("dave"), open("bob")
+	before, _ := u.s.sessions.lookup(u.cookies["bob"].Value)
+	time.Sleep(2500 * time.Millisecond) // a few stream ticks
+	if after, ok := u.s.sessions.lookup(u.cookies["bob"].Value); !ok || !after.expires.Equal(before.expires) {
+		t.Fatal("the page stream extended the session")
+	}
+	ws, err := u.s.cache.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// bob's credential is revoked; then dave loses read on plan.md, which
+	// also changes the page, and is told nothing.
+	if err := ws.RevokeCredentials("bob"); err != nil {
+		t.Fatal(err)
+	}
+	closedWithout(bob, "revocation")
+	if _, ok := u.s.sessions.lookup(u.cookies["bob"].Value); ok {
+		t.Fatal("session of a revoked credential was kept")
+	}
+	if err := ws.SetPermission("alice", "plan", "read"); err != nil {
+		t.Fatal(err)
+	}
+	closedWithout(dave, "losing read access")
+}
