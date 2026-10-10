@@ -44,7 +44,7 @@ func (w *Workspace) SetMetadata(actor, ref, key, value string) error {
 	if !w.Allowed(actor, p, Write) {
 		return fmt.Errorf("%s lacks write permission on %s", actor, p.Path)
 	}
-	return w.mutate(actor, p, Write, func(m *yaml.Node) error { return setMappingValue(m, key, value) })
+	return w.mutate(actor, p, Write, "set-metadata", func(m *yaml.Node) error { return setMappingValue(m, key, value) })
 }
 
 // SetPermission grants a capability on a page to the named identities,
@@ -74,15 +74,16 @@ func (w *Workspace) SetPermission(actor, ref, capability string, subjects ...str
 		}
 		clean = append(clean, s)
 	}
-	return w.mutate(actor, p, Admin, func(m *yaml.Node) error { return setPermissionEntry(m, want.String(), clean) })
+	return w.mutate(actor, p, Admin, "set-permission", func(m *yaml.Node) error { return setPermissionEntry(m, want.String(), clean) })
 }
 
 // mutate applies edit to a page's frontmatter under the guards of mutateFile.
-func (w *Workspace) mutate(actor string, p *Page, need Capability, edit func(*yaml.Node) error) error {
-	return w.mutateFile(actor, p, need, func(raw []byte) ([]byte, error) { return rewriteFrontmatter(raw, edit) })
+func (w *Workspace) mutate(actor string, p *Page, need Capability, op string, edit func(*yaml.Node) error) error {
+	return w.mutateFile(actor, p, need, op, func(raw []byte) ([]byte, error) { return rewriteFrontmatter(raw, edit) })
 }
 
-// mutateFile applies rewrite to a page's raw source. The caller holds w.lock.
+// mutateFile applies rewrite to a page's raw source. op names the operation
+// for the audit trail. The caller holds w.lock.
 //
 // The edit is staged, never tried out on disk: the page must still hold the
 // bytes it was read from (optimistic concurrency), the proposed workspace is
@@ -90,7 +91,7 @@ func (w *Workspace) mutate(actor string, p *Page, need Capability, edit func(*ya
 // proposal that the actor may make and that is no worse than the current
 // workspace is written, atomically. A rejected mutation leaves the file
 // untouched.
-func (w *Workspace) mutateFile(actor string, p *Page, need Capability, rewrite func([]byte) ([]byte, error)) error {
+func (w *Workspace) mutateFile(actor string, p *Page, need Capability, op string, rewrite func([]byte) ([]byte, error)) error {
 	if actorPage, ok := w.ResolveIdentity(actor); ok {
 		actor = strings.TrimSuffix(actorPage.Path, ".md")
 	}
@@ -112,7 +113,7 @@ func (w *Workspace) mutateFile(actor string, p *Page, need Capability, rewrite f
 	if bytes.Equal(next, raw) {
 		return nil
 	}
-	return w.stage(actor, "mutation", writes(map[string][]byte{p.Path: next}), func(current *Workspace) error {
+	return w.stage(actor, "mutation", writes(op, map[string][]byte{p.Path: next}), func(current *Workspace) error {
 		// Judge the actor against the workspace as it is now, not as this
 		// Workspace last saw it: a group elsewhere may have changed since.
 		if cur, ok := current.Pages[p.Path]; !ok || cur.Rev != p.Rev {
@@ -127,6 +128,9 @@ func (w *Workspace) mutateFile(actor string, p *Page, need Capability, rewrite f
 // change is a proposed edit of the workspace: files written, files removed,
 // and pages moved. Paths are workspace-relative and slash-separated.
 type change struct {
+	// op names the semantic operation, for the Jikko-Operation trailer when
+	// the change is committed.
+	op string
 	// write holds the new bytes of every file the change writes.
 	write map[string][]byte
 	// remove lists files the change deletes.
@@ -135,10 +139,27 @@ type change struct {
 	// is the same page: it keeps its grants and its administrators, and an
 	// identity keeps its own grants under its new name.
 	moved map[string]string
+	// files lists other workspace files the change writes, such as an
+	// uploaded asset, which are not pages and so are not in write.
+	files []string
 }
 
-// writes is a change that only writes files.
-func writes(overlay map[string][]byte) change { return change{write: overlay} }
+// writes is a change that only writes pages.
+func writes(op string, overlay map[string][]byte) change { return change{op: op, write: overlay} }
+
+// paths lists every workspace file the change touches, sorted.
+func (c change) paths() []string {
+	var out []string
+	for p := range c.write {
+		out = append(out, p)
+	}
+	for p := range c.remove {
+		out = append(out, p)
+	}
+	out = append(out, c.files...)
+	sort.Strings(out)
+	return dedupe(out)
+}
 
 // back maps a path of the proposed workspace to the path the same page has
 // now. Pages that do not move keep their path.
@@ -153,6 +174,10 @@ func (c change) back(pagePath string) string {
 // runs against the current workspace; write puts the change on disk. The
 // caller holds w.lock.
 func (w *Workspace) stage(actor, what string, c change, precheck func(current *Workspace) error, write func() error) error {
+	// Fail before writing when the change could not be recorded afterwards.
+	if w.AutoCommit && !GitBacked(w.Root) {
+		return fmt.Errorf("%s rejected: %w", what, ErrNoGit)
+	}
 	current, err := Open(w.Root)
 	if err != nil {
 		return err
@@ -190,6 +215,26 @@ func (w *Workspace) stage(actor, what string, c change, precheck func(current *W
 		return err
 	}
 	w.adopt(proposed)
+	return w.autoCommit(actor, c.op, c.paths())
+}
+
+// autoCommit records a mutation that has been applied, when AutoCommit is
+// on, as one commit of the paths it touched. The change is on disk either
+// way; an error here means it was saved but not recorded.
+func (w *Workspace) autoCommit(actor, op string, paths []string) error {
+	if !w.AutoCommit {
+		return nil
+	}
+	if op == "" {
+		op = "workspace-mutation"
+	}
+	res, err := w.CommitChanges(actor, op+": "+strings.Join(paths, ", "), op, paths)
+	if err != nil {
+		return fmt.Errorf("change saved but not committed: %w", err)
+	}
+	if w.OnCommit != nil && !res.Empty {
+		w.OnCommit(res)
+	}
 	return nil
 }
 

@@ -274,3 +274,93 @@ func TestMentionsRespectReadPermission(t *testing.T) {
 		t.Fatalf("forbidden page surfaced: %v", got)
 	}
 }
+
+func TestMentionDetailsReportLinesAndComments(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "alice.md", "---\ntype: identity\n---\n# Alice\n")
+	write(t, root, "bob.md", "---\ntype: identity\n---\n# Bob\n")
+	write(t, root, "crew.md", "---\ntype: identity\nmembers: [alice]\n---\n# Crew\n")
+	write(t, root, "plan.md", "---\ntype: task\nstatus: todo\n---\n# Plan\n\n@crew please read.\n\n```\n@alice in code does not count\n```\n\nThis <!--comment:c1-->needs work<!--/comment:c1-->.\n\n<!--comment-thread:c1\n@bob: @alice can you take it?\n-->\n")
+	write(t, root, "secret.md", "---\npermissions:\n  read: bob\n  admin: bob\n---\n@alice hidden\n")
+	w, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	details := w.MentionDetails("alice")
+	if len(details) != 1 || details[0].Path != "plan.md" || details[0].Type != Task || details[0].Title != "Plan" {
+		t.Fatalf("details = %+v", details)
+	}
+	m := details[0].Matches
+	if len(m) != 2 {
+		t.Fatalf("matches = %+v", m)
+	}
+	if m[0].Line != 7 || m[0].Text != "@crew please read." || m[0].Comment != "" {
+		t.Fatalf("first match = %+v", m[0])
+	}
+	if m[1].Line != 16 || m[1].Comment != "c1" || !strings.Contains(m[1].Text, "can you take it") {
+		t.Fatalf("comment match = %+v", m[1])
+	}
+	if pages := w.Mentions("alice"); len(pages) != 1 || pages[0].Path != "plan.md" {
+		t.Fatalf("Mentions = %v", pages)
+	}
+	if w.MentionDetails("crew") != nil || w.MentionDetails("nobody") != nil {
+		t.Fatal("a group or unknown identity has mentions")
+	}
+}
+
+func TestAssignedTo(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "alice.md", "---\ntype: identity\n---\n")
+	write(t, root, "bob.md", "---\ntype: identity\n---\n")
+	write(t, root, "crew.md", "---\ntype: identity\nmembers: [alice]\n---\n")
+	write(t, root, "direct.md", "---\ntype: task\nassignee: alice\n---\n")
+	write(t, root, "group.md", "---\ntype: task\nassignee: [crew, bob]\n---\n")
+	write(t, root, "ghost.md", "---\ntype: task\nassignee: ghost\n---\n")
+	write(t, root, "none.md", "---\ntype: task\n---\n")
+	w, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string]bool{
+		"alice": {"direct.md": true, "group.md": true},
+		"bob":   {"group.md": true},
+		"crew":  {"group.md": true},
+		"ghost": {},
+	}
+	for who, pages := range want {
+		for _, p := range w.sorted() {
+			if got := w.AssignedTo(p, who); got != pages[p.Path] {
+				t.Errorf("AssignedTo(%s, %s) = %v", p.Path, who, got)
+			}
+		}
+	}
+}
+
+func TestNewPageSource(t *testing.T) {
+	cases := []struct {
+		kind    Kind
+		content string
+		want    string
+	}{
+		{Document, "# Doc\n", "# Doc\n"},
+		{Document, "---\nowner: x\n---\n# Doc\n", "---\nowner: x\n---\n# Doc\n"},
+		{Task, "# T\n", "---\ntype: task\nstatus: todo\n---\n# T\n"},
+		{Task, "---\nstatus: doing\nassignee: alice\n---\n# T\n", "---\nstatus: doing\nassignee: alice\ntype: task\n---\n# T\n"},
+		{Task, "---\ntype: task\n---\n# T\n", "---\ntype: task\nstatus: todo\n---\n# T\n"},
+		{Identity, "# Alice\n", "---\ntype: identity\n---\n# Alice\n"},
+		{Identity, "", "---\ntype: identity\n---\n"},
+		{View, "filter:\n  type: task\n", "---\nfilter:\n  type: task\ntype: view\n---\n"},
+		{View, "---\ntype: view\nfilter: {type: task}\n---\n", "---\ntype: view\nfilter: {type: task}\n---\n"},
+	}
+	for _, c := range cases {
+		got, err := NewPageSource(c.kind, c.content)
+		if err != nil || string(got) != c.want {
+			t.Errorf("NewPageSource(%s, %q) = %q, %v; want %q", c.kind, c.content, got, err, c.want)
+		}
+	}
+	for kind, content := range map[Kind]string{Task: "---\ntype: view\n---\n", Document: "---\ntype: task\n---\n", View: "---\ntype: task\n---\n"} {
+		if _, err := NewPageSource(kind, content); err == nil {
+			t.Errorf("NewPageSource(%s, %q) accepted a contradicting type", kind, content)
+		}
+	}
+}
