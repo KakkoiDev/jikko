@@ -1,11 +1,13 @@
 package jikko
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func renderPage(t *testing.T, w *Workspace, actor, ref string) string {
@@ -222,5 +224,52 @@ func TestReadableFileFollowsThePagesThatUseIt(t *testing.T) {
 		if _, ok := w.ReadableFile(tc.actor, tc.file); ok != tc.ok {
 			t.Errorf("ReadableFile(%q, %q) = %v", tc.actor, tc.file, ok)
 		}
+	}
+}
+
+// Inline tokens keep their meaning when the scanner reuses an earlier
+// search: a mention right after a token still starts one, and a backtick run
+// without a closing fence does not hide a code span further on.
+func TestRenderInlineTokenBoundaries(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "bob.md", "---\ntype: identity\n---\n")
+	w := openTest(t, d)
+	r := w.Renderer("", DefaultLinks)
+	for in, want := range map[string]string{
+		"[[x]]@bob":   `<span class="jk-unresolved">x</span><a class="jk-mention" href="/p/bob.md">@bob</a>`,
+		"@bob@bob":    `<a class="jk-mention" href="/p/bob.md">@bob</a><a class="jk-mention" href="/p/bob.md">@bob</a>`,
+		"a@bob":       `a@bob`,
+		"**b**@bob":   `<strong>b</strong><a class="jk-mention" href="/p/bob.md">@bob</a>`,
+		"` *a* `b` c": "<code>*a*</code>b` c",
+		"*a* ` *b*":   "<em>a</em> ` <em>b</em>",
+		"*a*`x`*b*":   "<em>a</em><code>x</code><em>b</em>",
+	} {
+		if got := string(r.Inline(in)); got != want {
+			t.Errorf("Inline(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Rendering is linear in the size of a page: a paragraph of many tokens, or a
+// page with many comment anchors, must not cost a pass per token.
+func TestRenderLargePagesStayFast(t *testing.T) {
+	d := t.TempDir()
+	writeTest(t, d, "bob.md", "---\ntype: identity\n---\n")
+	w := openTest(t, d)
+	var body strings.Builder
+	body.WriteString(strings.Repeat("*a* [[x]] @bob `c` ", 20000))
+	body.WriteString("\n\n")
+	for i := 0; i < 3000; i++ {
+		fmt.Fprintf(&body, "Para <!--comment:c%d-->word<!--/comment:c%d--> here.\n\n<!--comment-thread:c%d\n@bob: note\n-->\n\n", i, i, i)
+	}
+	writeTest(t, d, "page.md", body.String())
+	w = openTest(t, d)
+	start := time.Now()
+	out := renderPage(t, w, "", "page")
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("rendering %d bytes took %v", body.Len(), took)
+	}
+	if strings.Count(out, "<em>a</em>") != 20000 || strings.Count(out, `<mark class="jk-anchor"`) != 3000 {
+		t.Fatal("large page rendered incompletely")
 	}
 }

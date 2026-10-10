@@ -267,13 +267,9 @@ func rewriteBodyRefs(body string, fn retargetFunc) (string, error) {
 		if name == "" {
 			continue
 		}
-		inside := false
-		for _, s := range spans {
-			if m[4] >= s[0] && m[4] < s[1] {
-				inside = true
-			}
-		}
-		if inside {
+		// spans are in text order: the one that could hold this mention is
+		// the last to start at or before it.
+		if i := sort.Search(len(spans), func(i int) bool { return spans[i][0] > m[4] }); i > 0 && m[4] < spans[i-1][1] {
 			continue
 		}
 		next, action, err := fn("body", identityReference, name)

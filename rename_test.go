@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // snapshotFiles returns every file of a workspace with its content, so a
@@ -433,5 +434,31 @@ func TestWriterMayRenameRestrictedPage(t *testing.T) {
 	moved, ok := w.Resolve("archive/plan")
 	if !ok || !w.Allowed("alice", moved, Admin) || !w.Allowed("bob", moved, Write) || w.Allowed("bob", moved, Admin) {
 		t.Fatal("policy did not move with the page")
+	}
+}
+
+// A mention inside a [[reference]] belongs to the reference, however many
+// references and mentions a page holds.
+func TestRewriteBodyRefsKeepsMentionsInsideReferences(t *testing.T) {
+	body := strings.Repeat("[[notes/@bob]] @bob ", 3) + "[[@bob|x]]"
+	start := time.Now()
+	out, err := rewriteBodyRefs(body, func(field string, kind refKind, ref string) (string, refAction, error) {
+		if kind == identityReference && ref == "bob" {
+			return "robert", replaceRef, nil
+		}
+		return "", keepRef, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Repeat("[[notes/@bob]] @robert ", 3) + "[[@bob|x]]"; out != want {
+		t.Fatalf("out = %q", out)
+	}
+	big := strings.Repeat("[[x]] @bob ", 100000)
+	if _, err := rewriteBodyRefs(big, func(string, refKind, string) (string, refAction, error) { return "", keepRef, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("rewriting %d references took %v", 200000, took)
 	}
 }

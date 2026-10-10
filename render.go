@@ -97,11 +97,16 @@ func prepare(body string) string {
 				cut{s.closeStart, s.closeEnd, anchorClose})
 		}
 	}
-	sort.Slice(cuts, func(i, j int) bool { return cuts[i].start > cuts[j].start })
+	sort.Slice(cuts, func(i, j int) bool { return cuts[i].start < cuts[j].start })
+	var b strings.Builder
+	last := 0
 	for _, c := range cuts {
-		body = body[:c.start] + c.text + body[c.end:]
+		b.WriteString(body[last:c.start])
+		b.WriteString(c.text)
+		last = c.end
 	}
-	return body
+	b.WriteString(body[last:])
+	return b.String()
 }
 
 var (
@@ -393,37 +398,88 @@ func (r *Renderer) inline(from, s string) string {
 	}
 	s = strings.ReplaceAll(s, anchorClose, "")
 	var b strings.Builder
-	for s != "" {
-		start, end, kind := -1, -1, ""
-		consider := func(k string, loc []int) {
-			if loc != nil && (start < 0 || loc[0] < start) {
-				start, end, kind = loc[0], loc[1], k
-			}
-		}
-		if i := strings.IndexByte(s, '`'); i >= 0 {
-			n := len(s[i:]) - len(strings.TrimLeft(s[i:], "`"))
-			fence := strings.Repeat("`", n)
-			if j := strings.Index(s[i+n:], fence); j >= 0 {
-				consider("code", []int{i, i + n + j + n})
-			}
-		}
-		consider("wiki", inlineWiki.FindStringIndex(s))
-		consider("link", inlineLink.FindStringIndex(s))
-		consider("strong", inlineStrong.FindStringIndex(s))
-		consider("em", inlineEm.FindStringIndex(s))
-		consider("url", inlineAutolink.FindStringIndex(s))
-		if m := mentionPattern.FindStringSubmatchIndex(s); m != nil {
-			consider("mention", []int{m[4] - 1, m[5]})
-		}
+	scan := newInlineScan(s)
+	pos := 0
+	for pos < len(s) {
+		start, end, kind := scan.next(pos)
 		if start < 0 {
-			b.WriteString(html.EscapeString(s))
+			b.WriteString(html.EscapeString(s[pos:]))
 			break
 		}
-		b.WriteString(html.EscapeString(s[:start]))
+		b.WriteString(html.EscapeString(s[pos:start]))
 		b.WriteString(r.token(from, kind, s[start:end]))
-		s = s[end:]
+		pos = end
 	}
 	return b.String()
+}
+
+// inlineKinds are the inline tokens in the order ties are broken.
+var inlineKinds = []struct {
+	name    string
+	pattern *regexp.Regexp
+}{
+	{"wiki", inlineWiki}, {"link", inlineLink}, {"strong", inlineStrong},
+	{"em", inlineEm}, {"url", inlineAutolink}, {"mention", mentionPattern},
+}
+
+// inlineScan finds the earliest inline token at or after a position. Each
+// pattern is searched again only once the position passes its last match,
+// so a run of many tokens costs one pass per pattern over the text rather
+// than one pass per token, which was quadratic in the length of a paragraph.
+// A match found from an earlier position stays the leftmost one from a later
+// position up to it: no pattern looks behind, and the only anchor, the
+// mention's start of text, is searched again whenever a token ends at "@".
+type inlineScan struct {
+	s     string
+	found [][]int // absolute [start, end] per kind, nil when none remains
+	done  []bool
+	// tick is the first backtick at or after the last code search; the code
+	// span cached with it holds until the position passes that backtick.
+	tick int
+	code []int
+}
+
+func newInlineScan(s string) *inlineScan {
+	return &inlineScan{s: s, found: make([][]int, len(inlineKinds)), done: make([]bool, len(inlineKinds)), tick: -1}
+}
+
+func (c *inlineScan) next(pos int) (start, end int, kind string) {
+	start = -1
+	consider := func(k string, loc []int) {
+		if loc != nil && (start < 0 || loc[0] < start) {
+			start, end, kind = loc[0], loc[1], k
+		}
+	}
+	if c.tick < pos {
+		c.tick, c.code = len(c.s), nil
+		if i := strings.IndexByte(c.s[pos:], '`'); i >= 0 {
+			i += pos
+			n := len(c.s[i:]) - len(strings.TrimLeft(c.s[i:], "`"))
+			c.tick = i
+			if j := strings.Index(c.s[i+n:], strings.Repeat("`", n)); j >= 0 {
+				c.code = []int{i, i + n + j + n}
+			}
+		}
+	}
+	consider("code", c.code)
+	for k, kind := range inlineKinds {
+		stale := !c.done[k] || (c.found[k] != nil && c.found[k][0] < pos)
+		if kind.name == "mention" && c.s[pos] == '@' {
+			stale = true
+		}
+		if stale {
+			c.done[k], c.found[k] = true, nil
+			if kind.name == "mention" {
+				if m := kind.pattern.FindStringSubmatchIndex(c.s[pos:]); m != nil {
+					c.found[k] = []int{pos + m[4] - 1, pos + m[5]}
+				}
+			} else if loc := kind.pattern.FindStringIndex(c.s[pos:]); loc != nil {
+				c.found[k] = []int{pos + loc[0], pos + loc[1]}
+			}
+		}
+		consider(kind.name, c.found[k])
+	}
+	return start, end, kind
 }
 
 func (r *Renderer) token(from, kind, t string) string {
