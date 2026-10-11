@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -197,6 +198,9 @@ type server struct {
 	csrfKey []byte
 	// maxUpload is the maximum size of an uploaded file.
 	maxUpload int64
+	// runner is the executable agents started from the browser run, set by
+	// --runner or JIKKO_RUNNER. Empty disables starting agents.
+	runner string
 }
 
 // pageData is what every template renders. Only the fields of the page being
@@ -227,7 +231,9 @@ type pageData struct {
 func serve(args []string) error {
 	var addr, maxUpload *string
 	var trustProxy, autoCommit *bool
+	var runner *string
 	args, dir, err := flagsNoToken("serve", args, func(f *flag.FlagSet) {
+		runner = f.String("runner", os.Getenv("JIKKO_RUNNER"), "executable agents started from the browser run (or JIKKO_RUNNER)")
 		addr = f.String("addr", "127.0.0.1:8080", "listen address")
 		maxUpload = f.String("max-upload", os.Getenv("JIKKO_MAX_UPLOAD"), "maximum upload size, such as 25M (or JIKKO_MAX_UPLOAD)")
 		trustProxy = f.Bool("behind-proxy", false, "trust X-Forwarded-Proto from a reverse proxy when setting cookie Secure")
@@ -258,6 +264,15 @@ func serve(args []string) error {
 	s := newServer(root, *trustProxy)
 	s.maxUpload = limit
 	s.cache.autoCommit = *autoCommit
+	if *runner != "" {
+		path, err := exec.LookPath(*runner)
+		if err != nil {
+			return fmt.Errorf("--runner: %w", err)
+		}
+		if s.runner, err = filepath.Abs(path); err != nil {
+			return err
+		}
+	}
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           s.routes(),
@@ -305,6 +320,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /save/{path...}", s.savePage)
 	mux.HandleFunc("POST /comment/{path...}", s.commentPage)
 	mux.HandleFunc("POST /status/{path...}", s.setStatus)
+	mux.HandleFunc("POST /agent/{path...}", s.agentControl)
 	mux.HandleFunc("POST /upload/{path...}", s.uploadFile)
 	mux.HandleFunc("GET /events/page/{path...}", s.pageEvents)
 	mux.HandleFunc("GET /events/activity/{path...}", s.activityEvents)

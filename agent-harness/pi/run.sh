@@ -39,7 +39,7 @@ set -- pi \
   --thinking "$THINKING" \
   --session-dir "$RUNS" \
   --no-extensions -e "$HERE/observer.ts" $JIKKO_ARGS \
-  --no-context-files --no-skills --no-prompt-templates --no-approve \
+  --no-context-files --no-skills --no-prompt-templates --no-approve --offline \
   "$@"
 
 exec "$@"

@@ -74,6 +74,7 @@ var templateFuncs = template.FuncMap{
 	"initials":  initials,
 	"statuses":  func() []string { return statusValues },
 	"statusURL": func(p string) string { return "/status/" + escapedPath(p) },
+	"agentURL":  func(p string) string { return "/agent/" + escapedPath(p) },
 	"lower":     strings.ToLower,
 	"asset": func(name string) string {
 		if v, ok := assetVersions[name]; ok {
@@ -239,6 +240,8 @@ type detailView struct {
 	IsAgent  bool
 	Initials string
 	Groups   []*jikko.Page
+	// CanRunAgent shows the start/stop control on an agent's identity page.
+	CanRunAgent, AgentOnline bool
 	// Section names the top-level list the page belongs to, for the crumb.
 	Section, SectionURL string
 }
@@ -368,6 +371,10 @@ func (s *server) detail(ws *jikko.Workspace, actor string, p *jikko.Page) *detai
 		d.Activity = s.activity(ws, actor, p)
 		ref := strings.TrimSuffix(p.Path, ".md")
 		d.IsAgent = len(p.Members) == 0 && isAgent(ws, ref)
+		d.CanRunAgent = s.canRunAgent(ws, actor, p)
+		if pr, ok := ws.PresenceOf(ref); ok {
+			d.AgentOnline = pr.Online
+		}
 		d.Initials = initials(p.Title)
 		for _, g := range ws.List(jikko.Identity, "") {
 			if len(g.Members) != 0 && ws.Allowed(actor, g, jikko.Read) && ws.MemberOf(ref, strings.TrimSuffix(g.Path, ".md")) {

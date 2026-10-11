@@ -16,13 +16,14 @@ import (
 // word; every serve flag is accepted and forwarded.
 func web(args []string) error {
 	var noOpen *bool
-	var addr, maxUpload *string
+	var addr, maxUpload, runner *string
 	var trustProxy, autoCommit *bool
 	args, dir, _, err := flags("web", args, func(f *flag.FlagSet) {
 		addr = f.String("addr", "127.0.0.1:8080", "listen address")
 		maxUpload = f.String("max-upload", os.Getenv("JIKKO_MAX_UPLOAD"), "maximum upload size, such as 25M (or JIKKO_MAX_UPLOAD)")
 		trustProxy = f.Bool("behind-proxy", false, "trust X-Forwarded-Proto from a reverse proxy when setting cookie Secure")
 		autoCommit = f.Bool("auto-commit", false, "record every change as a Git commit with Jikko-Actor and Jikko-Operation trailers")
+		runner = f.String("runner", os.Getenv("JIKKO_RUNNER"), "executable agents started from the browser run (or JIKKO_RUNNER)")
 		noOpen = f.Bool("no-open", false, "do not open a browser")
 	})
 	if err != nil {
@@ -40,6 +41,9 @@ func web(args []string) error {
 	}
 	if *autoCommit {
 		forward = append(forward, "--auto-commit")
+	}
+	if *runner != "" {
+		forward = append(forward, "--runner", *runner)
 	}
 	if !*noOpen {
 		go openWhenUp(*addr)
