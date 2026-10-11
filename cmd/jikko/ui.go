@@ -818,9 +818,18 @@ func (s *server) commentPage(w http.ResponseWriter, r *http.Request) {
 	var flash string
 	switch r.PostFormValue("op") {
 	case "add":
+		// The anchor field holds text selected in the rendered page, or an
+		// excerpt pasted as written; both are mapped to source text.
+		anchor := strings.TrimSpace(r.PostFormValue("anchor"))
+		if excerpt, mapErr := ws.SourceAnchor(actor, p.Path, anchor); mapErr == nil {
+			anchor = excerpt
+		} else {
+			err = mapErr
+			break
+		}
 		var id string
-		id, err = ws.AddComment(actor, p.Path, strings.TrimSpace(r.PostFormValue("anchor")), r.PostFormValue("text"))
-		flash = "Comment " + id + " added."
+		id, err = ws.AddComment(actor, p.Path, anchor, r.PostFormValue("text"))
+		flash = "Comment " + id + " added on “" + anchor + "”."
 	case "reply":
 		id := r.PostFormValue("id")
 		err = ws.ReplyComment(actor, p.Path, id, r.PostFormValue("text"))

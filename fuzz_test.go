@@ -123,6 +123,26 @@ func FuzzScanComments(f *testing.F) {
 	})
 }
 
+func FuzzSourceAnchor(f *testing.F) {
+	w := fuzzWorkspace(f)
+	f.Add("Ship the **first version** soon, see [[b|the task]] and `code`.\n\n- [x] *a* ~~b~~\n", "first version soon")
+	f.Add("x <!--comment:c1-->y **z**<!--/comment:c1--> w\n\n<!--comment-thread:c1\n@alice: hi\n-->\n", "y z")
+	f.Add("| a | **b** |\n|---|---|\n| c | d |\n", "b")
+	f.Fuzz(func(t *testing.T, body, selected string) {
+		p := &Page{Path: "fuzz.md", Body: body}
+		w.Pages[p.Path] = p
+		w.index()
+		defer func() { delete(w.Pages, p.Path); w.index() }()
+		got, err := w.SourceAnchor("alice", "fuzz", selected)
+		if err != nil {
+			return
+		}
+		if got == "" || strings.ContainsAny(got, "\r\n") || !strings.Contains(clean(body), got) {
+			t.Fatalf("SourceAnchor(%q, %q) = %q: not a one-line excerpt of the body", body, selected, got)
+		}
+	})
+}
+
 func FuzzMerge3(f *testing.F) {
 	f.Add([]byte("---\na: 1\n---\n# T\n\nline\n"), []byte("---\na: 2\n---\n# T\n\nline\n"), []byte("---\na: 1\nb: 3\n---\n# T\n\nline\nmore\n"))
 	f.Add([]byte("a\nb\nc\n"), []byte("a\nB\nc\n"), []byte("a\nb\nC\n"))

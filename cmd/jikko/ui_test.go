@@ -878,3 +878,28 @@ func TestProblemsPageAndThreadCounts(t *testing.T) {
 		}
 	}
 }
+
+// A comment anchored from a selection of rendered text lands on the source
+// behind it, across Markdown syntax; a selection that maps to nothing is
+// explained.
+func TestCommentAnchorsMapRenderedText(t *testing.T) {
+	u := uiWorkspace(t)
+	if err := os.WriteFile(filepath.Join(u.dir, "plan.md"), []byte("---\npermissions:\n  comment: carol\n  admin: alice\n---\n# Plan\n\nShip the **first version** soon, see [[open|the open page]].\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rec := u.post(t, "carol", "/comment/plan.md", url.Values{"op": {"add"}, "anchor": {"the first version soon"}, "text": {"Define soon."}}, htmx)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Comment c1 added on “the **first version** soon”") {
+		t.Fatalf("comment from a rendered selection = %d\n%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(u.read(t, "plan.md"), "<!--comment:c1-->the **first version** soon<!--/comment:c1-->") {
+		t.Fatalf("anchor not mapped to source:\n%s", u.read(t, "plan.md"))
+	}
+	rec = u.post(t, "carol", "/comment/plan.md", url.Values{"op": {"add"}, "anchor": {"open page"}, "text": {"Link?"}}, htmx)
+	if rec.Code != http.StatusOK || !strings.Contains(u.read(t, "plan.md"), "<!--comment:c2-->[[open|the open page]]<!--/comment:c2-->") {
+		t.Fatalf("anchor across a reference = %d\n%s", rec.Code, u.read(t, "plan.md"))
+	}
+	rec = u.post(t, "carol", "/comment/plan.md", url.Values{"op": {"add"}, "anchor": {"nowhere at all"}, "text": {"?"}}, htmx)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "was not found in the page") {
+		t.Fatalf("unmappable anchor = %d\n%s", rec.Code, rec.Body.String())
+	}
+}

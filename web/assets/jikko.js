@@ -6,12 +6,18 @@
 document.addEventListener("selectionchange", function () {
   var selection = document.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
-  var node = selection.getRangeAt(0).commonAncestorContainer;
+  var range = selection.getRangeAt(0);
+  var node = range.commonAncestorContainer;
   var element = node.nodeType === 1 ? node : node.parentElement;
   if (!element || !element.closest(".jk-body")) return;
-  var text = selection.toString().replace(/\s+/g, " ").trim();
+  // The comment ids shown after existing anchors are not page text; the
+  // server maps the rendered text back to the Markdown source, across bold,
+  // links and references.
+  var copy = range.cloneContents();
+  copy.querySelectorAll(".jk-anchor-ref").forEach(function (ref) { ref.remove(); });
+  var text = (copy.textContent || "").replace(/\s+/g, " ").trim();
   var field = document.getElementById("jk-anchor");
-  if (field && text && text.indexOf("\n") < 0) field.value = text;
+  if (field && text) field.value = text;
 });
 
 // The search box on the workspace list narrows the cards to those whose text
