@@ -133,12 +133,15 @@ unless the body's frontmatter sets one; a view's body is its frontmatter.`,
 		short: "report workspace problems and broken references",
 	},
 	"serve": {
-		use:   []string{"serve [--addr HOST:PORT] [--max-upload SIZE] [--behind-proxy] [--auto-commit]"},
+		use:   []string{"serve [--addr HOST:PORT] [--max-upload SIZE] [--behind-proxy] [--auto-commit] [--runner CMD]"},
 		short: "serve the workspace over HTTP",
-		long:  "--auto-commit records every change made through the browser as an attributed Git commit.",
+		long: `--auto-commit records every change made through the browser as an attributed Git commit.
+--runner (or JIKKO_RUNNER) lets people who may edit an agent's identity page
+start and stop it from that page; it runs "jikko identity <name> start" with
+this runner, logging to .data/logs/<name>.log.`,
 	},
 	"web": {
-		use:   []string{"web [--addr HOST:PORT] [--max-upload SIZE] [--behind-proxy] [--auto-commit] [--no-open]"},
+		use:   []string{"web [--addr HOST:PORT] [--max-upload SIZE] [--behind-proxy] [--auto-commit] [--runner CMD] [--no-open]"},
 		short: "serve the workspace and open it in the browser",
 		long:  "Every serve flag is accepted and forwarded. --no-open only serves.",
 	},

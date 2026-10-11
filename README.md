@@ -8,13 +8,28 @@ Jikko is the authoritative place for the work. Humans and agents are expected to
 
 A workspace is ordinary files. YAML frontmatter adds explicit semantics, `[[links]]` express relationships, `![[embeds]]` compose files, inline comments keep unresolved review attached to source, and `@mentions` address humans, agents, and groups. Git is the reference harness substrate for audit/history and three-way text merge.
 
-## Quickstart
+## Install
 
-Jikko is pre-release, so the current install needs Go:
+With Go 1.25 or later:
 
 ```sh
 go install github.com/KakkoiDev/jikko/cmd/jikko@latest
 ```
+
+With Homebrew (macOS or Linux), once the tap exists:
+
+```sh
+brew install KakkoiDev/tap/jikko
+```
+
+Or download a prebuilt binary for Linux, macOS (amd64, arm64), or Windows
+(amd64) from the [Releases page](https://github.com/KakkoiDev/jikko/releases)
+and verify it with `sha256sum -c checksums.txt --ignore-missing`.
+
+`jikko version` prints the release you have. Releases are built from tags by
+`.github/workflows/release.yml`; see [docs/RELEASING.md](docs/RELEASING.md).
+
+## Quickstart
 
 Every command below runs inside the workspace directory; pass `--dir PATH`
 to run it from elsewhere. Commands that act as somebody read `JIKKO_TOKEN`

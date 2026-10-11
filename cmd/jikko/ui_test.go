@@ -908,3 +908,27 @@ func TestCommentAnchorsMapRenderedText(t *testing.T) {
 		t.Fatalf("unmappable anchor = %d\n%s", rec.Code, rec.Body.String())
 	}
 }
+
+// Starting an agent from the browser needs a runner fixed by the server and
+// write access to the agent's identity page.
+func TestAgentControlRequiresRunnerAndWrite(t *testing.T) {
+	u := uiWorkspace(t)
+	if err := os.WriteFile(filepath.Join(u.dir, "agents.md"), []byte("---\ntype: identity\nmembers:\n  - bob\n---\n# Agents\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"op": {"start"}}
+	if rec := u.post(t, "alice", "/agent/bob.md", form, nil); rec.Code != http.StatusConflict {
+		t.Fatalf("without a runner: %d, want 409", rec.Code)
+	}
+	u.s.runner = "/bin/true"
+	if rec := u.post(t, "", "/agent/bob.md", form, nil); rec.Code == http.StatusOK || rec.Code == http.StatusSeeOther {
+		t.Fatalf("anonymous start allowed: %d", rec.Code)
+	}
+	page := u.get(t, "alice", "/p/bob.md").Body.String()
+	if !strings.Contains(page, "Start agent") {
+		t.Fatal("agent identity page lacks the start control for a writer")
+	}
+	if strings.Contains(u.get(t, "alice", "/p/carol.md").Body.String(), "Start agent") {
+		t.Fatal("a non-agent identity offers a start control")
+	}
+}
