@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	jikko "github.com/KakkoiDev/jikko"
 )
 
 type uiTeam struct {
@@ -736,7 +738,10 @@ func TestPageEventsFollowSessionAndAccess(t *testing.T) {
 	if after, ok := u.s.sessions.lookup(u.cookies["bob"].Value); !ok || !after.expires.Equal(before.expires) {
 		t.Fatal("the page stream extended the session")
 	}
-	ws, err := u.s.cache.load()
+	// The mutations happen in a workspace of their own, as every harness
+	// operation does: the server's cached workspace is shared by readers
+	// and never changed in place.
+	ws, err := jikko.Open(u.dir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,9 @@ const (
 	maxStreams = 64
 	// maxLoginBody bounds the login form an unauthenticated caller may send.
 	maxLoginBody = 4 << 10
+	// refreshInterval is how often a live list is rendered again when
+	// nothing changed, so "3m ago" does not go stale.
+	refreshInterval = 30 * time.Second
 )
 
 // cache holds the parsed workspace and re-reads it only when the Markdown tree
@@ -45,20 +49,45 @@ type cache struct {
 	ws    *jikko.Workspace
 	err   error
 	ready bool
+	// checked is when the tree was last stamped. Live streams ask every
+	// second each; one stamp per stampInterval serves them all.
+	checked time.Time
 
 	// autoCommit records every mutation as an attributed Git commit.
 	autoCommit bool
 }
 
+// stampInterval is how long a tree stamp is trusted before the tree is
+// walked again.
+const stampInterval = 500 * time.Millisecond
+
+// load returns the current workspace, stamping the tree first so a request
+// always sees the files as they are.
 func (c *cache) load() (*jikko.Workspace, error) {
-	stamp, err := treeStamp(c.dir)
-	if err != nil {
-		return nil, err
-	}
+	ws, _, err := c.refresh(0)
+	return ws, err
+}
+
+// loadStamped is load for a live stream: it returns the stamp too, so the
+// stream can tell whether anything changed, and trusts a stamp taken within
+// stampInterval, so many streams cost one walk between them.
+func (c *cache) loadStamped() (*jikko.Workspace, string, error) {
+	return c.refresh(stampInterval)
+}
+
+func (c *cache) refresh(trust time.Duration) (*jikko.Workspace, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.ready && trust > 0 && time.Since(c.checked) < trust {
+		return c.ws, c.stamp, c.err
+	}
+	stamp, err := treeStamp(c.dir)
+	if err != nil {
+		return nil, "", err
+	}
+	c.checked = time.Now()
 	if c.ready && stamp == c.stamp {
-		return c.ws, c.err
+		return c.ws, c.stamp, c.err
 	}
 	ws, err := jikko.Open(c.dir)
 	if err == nil {
@@ -68,35 +97,54 @@ func (c *cache) load() (*jikko.Workspace, error) {
 		}
 	}
 	c.stamp, c.ws, c.err, c.ready = stamp, ws, err, true
-	return ws, err
+	return ws, stamp, err
 }
 
+// treeStamp fingerprints the names, sizes and modification times of the
+// workspace's files -- pages and assets alike, since an asset dropped into
+// the tree changes what embeds resolve to -- skipping what the workspace
+// ignores.
 func treeStamp(dir string) (string, error) {
 	h := sha256.New()
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" || d.Name() == ".data" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.EqualFold(filepath.Ext(p), ".md") {
-			return nil
-		}
+	err := jikko.WalkFiles(dir, func(p, rel string, d fs.DirEntry) error {
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(h, "%s\x00%d\x00%d\n", p, info.Size(), info.ModTime().UnixNano())
+		fmt.Fprintf(h, "%s\x00%d\x00%d\n", rel, info.Size(), info.ModTime().UnixNano())
 		return nil
 	})
 	if err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// liveStamp fingerprints everything the home page shows besides the tree:
+// presence records and the sessions people hold.
+func (s *server) liveStamp(ws *jikko.Workspace) string {
+	h := sha256.New()
+	if entries, err := os.ReadDir(filepath.Join(ws.Root, ".data", "presence")); err == nil {
+		for _, e := range entries {
+			if info, err := e.Info(); err == nil {
+				fmt.Fprintf(h, "%s\x00%d\n", e.Name(), info.ModTime().UnixNano())
+			}
+		}
+	}
+	active := s.sessions.active()
+	for _, name := range sortedNames(active) {
+		fmt.Fprintf(h, "%s\x00%d\n", name, active[name].Unix()/60)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func sortedNames(m map[string]time.Time) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 type server struct {
@@ -509,6 +557,13 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	// The list is rendered again only when the tree, presence or sessions
+	// changed, or every refreshInterval so relative times stay current; a
+	// tick that finds nothing changed costs a cached stamp and a session
+	// check.
+	ws, stamp, _ := s.cache.loadStamped()
+	key := stamp + s.liveStamp(ws)
+	rendered := time.Now()
 	expiry := time.After(streamMaxAge)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -520,7 +575,20 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-ticker.C:
 		}
+		ws, stamp, err := s.cache.loadStamped()
+		if err != nil {
+			continue
+		}
+		if s.actor(r, ws, false) != actor {
+			return
+		}
+		if next := stamp + s.liveStamp(ws); next == key && time.Since(rendered) < refreshInterval {
+			continue
+		} else {
+			key = next
+		}
 		current, now, err := s.render("pages", r, false)
+		rendered = time.Now()
 		if err == nil && now != actor {
 			return
 		}

@@ -264,6 +264,9 @@ func (w *Workspace) lock() func() {
 // written: reading it to take the lock cannot race with a swap.
 func (w *Workspace) adopt(next *Workspace) {
 	w.Pages, w.Problems, w.byStem = next.Pages, next.Problems, next.byStem
+	w.filesMu.Lock()
+	w.files = nil
+	w.filesMu.Unlock()
 }
 
 // safePath resolves a page to a real file inside the workspace. Jikko never

@@ -278,6 +278,9 @@ func (w *Workspace) newPagePath(pagePath string) (clean, target string, err erro
 	if reservedPath(clean) {
 		return "", "", fmt.Errorf("%s is reserved for the harness and is not workspace source", clean)
 	}
+	if Ignored(w.Root, clean) {
+		return "", "", fmt.Errorf("%s is excluded by an ignore file, so a page there would never be read", clean)
+	}
 	// A path that [[reference]] syntax cannot spell would leave the page
 	// addressable by no authored reference.
 	if strings.ContainsAny(clean, "[]|") || strings.IndexFunc(clean, unicode.IsControl) >= 0 {

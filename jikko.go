@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -103,6 +104,10 @@ type Workspace struct {
 	// OnCommit, when set, is called with each commit AutoCommit records.
 	OnCommit func(*CommitResult)
 
+	// files caches the asset index for this state of the workspace.
+	filesMu sync.Mutex
+	files   *fileIndex
+
 	byStem map[string][]*Page
 }
 
@@ -124,16 +129,7 @@ func openOverlay(root string, overlay map[string][]byte, removed map[string]bool
 		return nil, err
 	}
 	w := &Workspace{Root: root, Pages: map[string]*Page{}}
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" || d.Name() == ".data" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	err = WalkFiles(root, func(p, rel string, d fs.DirEntry) error {
 		// Compared without case: on a case-insensitive filesystem LoadAuth
 		// reads .AUTH.md as the credential file, so it must never be a page.
 		if strings.EqualFold(d.Name(), ".auth.md") {
@@ -142,11 +138,6 @@ func openOverlay(root string, overlay map[string][]byte, removed map[string]bool
 		if !strings.EqualFold(filepath.Ext(p), ".md") {
 			return nil
 		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
 		if removed[rel] {
 			if _, replaced := overlay[rel]; !replaced {
 				return nil

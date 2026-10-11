@@ -7,40 +7,79 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // ProblemReference reports a link or embed that resolves to nothing.
 const ProblemReference = "reference"
 
 // assetIndex lists the workspace's non-Markdown files, the targets of embeds
-// such as ![[diagram.png]] (specification §5.2). Harness state is excluded,
-// and so are symbolic links, which a reference must not follow out of the
-// workspace.
+// such as ![[diagram.png]] (specification §5.2). Harness state and ignored
+// files are excluded, and so are symbolic links, which a reference must not
+// follow out of the workspace.
 type assetIndex struct {
 	paths  map[string]bool
 	byBase map[string][]string
 }
 
+// fileIndex caches the asset index and the pages using each file for one
+// workspace state. It is built on first use and dropped when the workspace
+// adopts a new state.
+type fileIndex struct {
+	once sync.Once
+	idx  assetIndex
+	err  error
+	// usedBy maps a file to the pages that link, embed, show or cite it.
+	usedBy map[string][]string
+}
+
 func (w *Workspace) assets() (assetIndex, error) {
-	idx := assetIndex{paths: map[string]bool{}, byBase: map[string][]string{}}
-	err := filepath.WalkDir(w.Root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	fi := w.fileIndex()
+	return fi.idx, fi.err
+}
+
+func (w *Workspace) fileIndex() *fileIndex {
+	w.filesMu.Lock()
+	if w.files == nil {
+		w.files = &fileIndex{}
+	}
+	fi := w.files
+	w.filesMu.Unlock()
+	fi.once.Do(func() {
+		fi.idx, fi.err = scanAssets(w.Root)
+		if fi.err != nil {
+			return
 		}
-		if d.IsDir() {
-			if d.Name() == ".git" || d.Name() == ".data" {
-				return filepath.SkipDir
+		fi.usedBy = map[string][]string{}
+		for _, p := range w.sorted() {
+			for _, ref := range w.fileRefs(p) {
+				if f, ok, _ := fi.idx.resolve(p.Path, ref); ok {
+					fi.usedBy[f] = append(fi.usedBy[f], p.Path)
+				}
 			}
-			return nil
 		}
+	})
+	return fi
+}
+
+// fileRefs lists the references of a page that may name a file: links,
+// embeds, Markdown images, and a Task's proof.
+func (w *Workspace) fileRefs(p *Page) []string {
+	refs := append(append([]string{}, p.Links...), p.Embeds...)
+	refs = append(refs, imageSources(p.Body)...)
+	if p.Kind == Task {
+		proofs, _ := taskRefs(p, "proof")
+		refs = append(refs, proofs...)
+	}
+	return refs
+}
+
+func scanAssets(root string) (assetIndex, error) {
+	idx := assetIndex{paths: map[string]bool{}, byBase: map[string][]string{}}
+	err := WalkFiles(root, func(p, rel string, d fs.DirEntry) error {
 		if !d.Type().IsRegular() || strings.EqualFold(filepath.Ext(p), ".md") || strings.EqualFold(d.Name(), ".auth.md") {
 			return nil
 		}
-		rel, err := filepath.Rel(w.Root, p)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
 		idx.paths[rel] = true
 		idx.byBase[path.Base(rel)] = append(idx.byBase[path.Base(rel)], rel)
 		return nil
@@ -129,24 +168,13 @@ func (w *Workspace) ReadableFile(actor, rel string) (string, bool) {
 			return "", false
 		}
 	}
-	idx, err := w.assets()
-	if err != nil || !idx.paths[rel] {
+	fi := w.fileIndex()
+	if fi.err != nil || !fi.idx.paths[rel] {
 		return "", false
 	}
-	for _, p := range w.sorted() {
-		if !w.Allowed(actor, p, Read) {
-			continue
-		}
-		refs := append(append([]string{}, p.Links...), p.Embeds...)
-		refs = append(refs, imageSources(p.Body)...)
-		if p.Kind == Task {
-			proofs, _ := taskRefs(p, "proof")
-			refs = append(refs, proofs...)
-		}
-		for _, ref := range refs {
-			if f, ok, _ := idx.resolve(p.Path, ref); ok && f == rel {
-				return filepath.Join(w.Root, filepath.FromSlash(rel)), true
-			}
+	for _, pagePath := range fi.usedBy[rel] {
+		if p, ok := w.Pages[pagePath]; ok && w.Allowed(actor, p, Read) {
+			return filepath.Join(w.Root, filepath.FromSlash(rel)), true
 		}
 	}
 	return "", false

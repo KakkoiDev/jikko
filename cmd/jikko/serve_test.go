@@ -701,11 +701,22 @@ func TestCacheReloadsOnlyOnChange(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD.md"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "asset.png"), []byte("x"), 0644); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "x"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "node_modules", "x", "readme.md"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if again, _ := c.load(); again != first {
-		t.Fatal("non-source change re-parsed the workspace")
+		t.Fatal("harness-state or ignored change re-parsed the workspace")
+	}
+	// An asset changes what embeds resolve to, so it counts as a change.
+	if err := os.WriteFile(filepath.Join(dir, "asset.png"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	withAsset, _ := c.load()
+	if withAsset == first {
+		t.Fatal("new asset not picked up")
 	}
 	if err := os.WriteFile(filepath.Join(dir, "b.md"), []byte("# B\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -714,8 +725,22 @@ func TestCacheReloadsOnlyOnChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next == first || len(next.Pages) != 2 {
+	if next == withAsset || len(next.Pages) != 2 {
 		t.Fatal("new page not picked up")
+	}
+	// A live stream trusts a fresh stamp for a moment, so many streams
+	// cost one walk between them; a request never does.
+	if _, stamp, _ := c.loadStamped(); stamp == "" {
+		t.Fatal("no stamp")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "c.md"), []byte("# C\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if ws, _, _ := c.loadStamped(); ws != next {
+		t.Fatal("stream re-walked within the trust interval")
+	}
+	if ws, _ := c.load(); ws == next || len(ws.Pages) != 3 {
+		t.Fatal("request did not see the new page")
 	}
 }
 
