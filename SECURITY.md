@@ -86,12 +86,26 @@ authenticated caller with the capability, and every change goes through the
 same staged, authorized core operations as the CLI.
 
 Every state-changing request (`/login`, `/logout`, `/save/...`,
-`/comment/...`, `/upload/...`) must be same-origin by Fetch Metadata or
-`Origin`, and must carry an anti-forgery token: an HMAC, under a per-process key, of the
-session id or, before login, of a random pre-session cookie. Both cookies
-are `HttpOnly` and `SameSite=Strict`. A request authenticated with an
+`/comment/...`, `/status/...`, `/upload/...`, `/create`, `/rename/...`,
+`/delete/...`)
+must be same-origin by Fetch Metadata or `Origin`, and must carry an
+anti-forgery token: an HMAC, under the server's signing key, of the session
+id or, before login, of a random pre-session cookie. Both cookies are
+`HttpOnly` and `SameSite=Strict`. A request authenticated with an
 `Authorization: Bearer` header carries no ambient credential and needs no
 token.
+
+The signing key and the table of browser sessions are kept under `.data/`
+(`web-key` and `sessions.json`, both mode 0600 in a directory of mode 0700)
+so that restarting the server neither logs everyone out nor invalidates the
+forms people have open. The table stores the SHA-256 hash of each session
+id, the identity and credential it was exchanged for, and its expiry; the
+cookie value itself is never written. `.data` is derived runtime state:
+deleting it ends every session and nothing else. A workspace whose `.data`
+cannot be written still serves, with a key for that process only, and says
+so in its log. Anyone who can read `.data` on the host can sign forms and,
+with a captured cookie, keep a session alive; the host's filesystem
+permissions are the boundary, as they are for `.auth.md`.
 
 Page Markdown is rendered by Jikko's own renderer, which escapes every
 character of source and emits only the elements it writes: raw HTML in a

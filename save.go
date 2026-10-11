@@ -93,7 +93,7 @@ func (w *Workspace) SaveSource(actor, ref, baseRev string, yours []byte, opt Sav
 		return nil, err
 	}
 	if !cur.Allowed(actor, p, Write) {
-		return nil, fmt.Errorf("%s lacks write permission on %s", actor, p.Path)
+		return nil, &PermissionError{Actor: actor, Need: Write, Path: p.Path}
 	}
 	target, err := cur.safePath(p)
 	if err != nil {
@@ -142,14 +142,14 @@ func (w *Workspace) SaveSource(actor, ref, baseRev string, yours []byte, opt Sav
 	if policyChanged(p.Path, raw, next) {
 		need = Admin
 		if !cur.Allowed(actor, p, Admin) {
-			return nil, fmt.Errorf("%s lacks admin permission on %s, which changing its permissions needs", actor, p.Path)
+			return nil, &PermissionError{Actor: actor, Need: Admin, Path: p.Path, Reason: "which changing its permissions needs"}
 		}
 	}
 	err = w.stage(actor, "edit", writes("save", map[string][]byte{p.Path: next}), func(current *Workspace) error {
 		if now, ok := current.Pages[p.Path]; !ok || now.Rev != currentRev {
 			return fmt.Errorf("%s changed on disk after it was read; retry", p.Path)
 		} else if !current.Allowed(actor, now, need) {
-			return fmt.Errorf("%s lacks %s permission on %s", actor, need, p.Path)
+			return &PermissionError{Actor: actor, Need: need, Path: p.Path}
 		}
 		return nil
 	}, func() error { return writeAtomic(target, next) })

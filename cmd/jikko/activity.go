@@ -279,7 +279,11 @@ func (s *server) cards(ws *jikko.Workspace, pages []*jikko.Page) []cardView {
 		case jikko.View:
 			c.Extra = "view"
 		default:
-			if n := len(p.Links); n == 1 {
+			if n := len(p.Comments); n == 1 {
+				c.Extra = "1 open thread"
+			} else if n > 1 {
+				c.Extra = fmt.Sprintf("%d open threads", n)
+			} else if n := len(p.Links); n == 1 {
 				c.Extra = "links to 1 page"
 			} else if n > 1 {
 				c.Extra = fmt.Sprintf("links to %d pages", n)

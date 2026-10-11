@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	jikko "github.com/KakkoiDev/jikko"
 )
 
 type uiTeam struct {
@@ -736,7 +738,10 @@ func TestPageEventsFollowSessionAndAccess(t *testing.T) {
 	if after, ok := u.s.sessions.lookup(u.cookies["bob"].Value); !ok || !after.expires.Equal(before.expires) {
 		t.Fatal("the page stream extended the session")
 	}
-	ws, err := u.s.cache.load()
+	// The mutations happen in a workspace of their own, as every harness
+	// operation does: the server's cached workspace is shared by readers
+	// and never changed in place.
+	ws, err := jikko.Open(u.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,6 +758,155 @@ func TestPageEventsFollowSessionAndAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	closedWithout(dave, "losing read access")
+}
+
+func TestCreatePageForm(t *testing.T) {
+	u := uiWorkspace(t)
+	if rec := u.get(t, "", "/new"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous /new = %d", rec.Code)
+	}
+	if body := u.get(t, "bob", "/new?type=task").Body.String(); !strings.Contains(body, `name="type" value="task"`) {
+		t.Fatalf("task form not offered:\n%s", body)
+	}
+	for _, tc := range []struct{ path, typ, body, want string }{
+		{"notes/meeting", "document", "# Meeting\n\nNotes.", "# Meeting\n\nNotes.\n"},
+		{"tasks/review", "task", "", "---\ntype: task\nstatus: todo\n---\n# review\n"},
+		{"dan", "identity", "# Dan", "---\ntype: identity\n---\n# Dan\n"},
+	} {
+		rec := u.post(t, "bob", "/create", url.Values{"path": {tc.path}, "type": {tc.typ}, "body": {tc.body}}, nil)
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/p/"+tc.path+".md" {
+			t.Fatalf("create %s = %d %s\n%s", tc.path, rec.Code, rec.Header().Get("Location"), rec.Body.String())
+		}
+		if got := u.read(t, tc.path+".md"); got != tc.want {
+			t.Fatalf("%s = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+	rec := u.post(t, "bob", "/create", url.Values{"path": {"dan"}, "type": {"document"}, "body": {"x"}}, nil)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "already exists") {
+		t.Fatalf("duplicate = %d\n%s", rec.Code, rec.Body.String())
+	}
+	if rec := u.post(t, "bob", "/create", url.Values{"path": {"../out"}, "type": {"document"}}, nil); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("escaping path = %d", rec.Code)
+	}
+	if rec := u.post(t, "", "/create", url.Values{"path": {"x"}, "type": {"document"}}, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous create = %d", rec.Code)
+	}
+}
+
+func TestRenameAndDeleteForms(t *testing.T) {
+	u := uiWorkspace(t)
+	// Only a writer sees the forms.
+	if body := u.get(t, "carol", "/p/plan.md").Body.String(); strings.Contains(body, "jk-rename") {
+		t.Fatal("commenter offered the rename form")
+	}
+	if body := u.get(t, "bob", "/p/plan.md").Body.String(); !strings.Contains(body, "jk-rename") || !strings.Contains(body, "jk-delete") {
+		t.Fatal("writer not offered the forms")
+	}
+	if rec := u.post(t, "carol", "/rename/plan.md", url.Values{"to": {"plans/v1"}}, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("commenter rename = %d", rec.Code)
+	}
+	rec := u.post(t, "bob", "/rename/plan.md", url.Values{"to": {"plans/v1"}}, htmx)
+	if rec.Code != http.StatusOK || rec.Header().Get("HX-Push-Url") != "/p/plans/v1.md" {
+		t.Fatalf("rename = %d %q\n%s", rec.Code, rec.Header().Get("HX-Push-Url"), rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Renamed plan.md to plans/v1.md.", "Rewritten to keep pointing", `<a href="/p/open.md">open.md</a>`, `<code class="jk-inline-code">plan</code>`, `<code class="jk-inline-code">v1</code>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in rename report:\n%s", want, body)
+		}
+	}
+	if !strings.Contains(u.read(t, "open.md"), "[[v1]]") {
+		t.Fatal("reference not rewritten")
+	}
+	if rec := u.post(t, "bob", "/rename/plans/v1.md", url.Values{"to": {"open"}}, nil); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "already exists") {
+		t.Fatalf("rename onto an existing page = %d", rec.Code)
+	}
+	// Deletion is refused while comments are open, and reports broken links.
+	if _, err := u.s.cache.load(); err != nil {
+		t.Fatal(err)
+	}
+	u.post(t, "carol", "/comment/plans/v1.md", url.Values{"op": {"add"}, "anchor": {"Ship"}, "text": {"Why?"}}, nil)
+	rec = u.post(t, "bob", "/delete/plans/v1.md", nil, nil)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "unresolved comment") {
+		t.Fatalf("delete with comments = %d\n%s", rec.Code, rec.Body.String())
+	}
+	u.post(t, "carol", "/comment/plans/v1.md", url.Values{"op": {"resolve"}, "id": {"c1"}}, nil)
+	rec = u.post(t, "bob", "/delete/plans/v1.md", nil, htmx)
+	if rec.Code != http.StatusOK || rec.Header().Get("HX-Push-Url") != "/" {
+		t.Fatalf("delete = %d\n%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Deleted plans/v1.md.") || !strings.Contains(rec.Body.String(), "No longer resolve") || !strings.Contains(rec.Body.String(), "open.md") {
+		t.Fatalf("delete report:\n%s", rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(u.dir, "plans", "v1.md")); !os.IsNotExist(err) {
+		t.Fatal("page not deleted")
+	}
+	if rec := u.post(t, "", "/delete/open.md", nil, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous delete = %d", rec.Code)
+	}
+}
+
+func TestProblemsPageAndThreadCounts(t *testing.T) {
+	u := uiWorkspace(t)
+	if err := os.WriteFile(filepath.Join(u.dir, "t1.md"), []byte("---\ntype: task\nstatus: doing\n---\n# First task\n\nAsk @carol. [[nowhere]]\n\n<!--comment:c1-->Ask<!--/comment:c1-->\n\n<!--comment-thread:c1\n@carol: ok\n-->\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Problems are filtered to readable pages and the hidden ones counted;
+	// warnings are listed with them.
+	if err := os.WriteFile(filepath.Join(u.dir, "secret.md"), []byte("---\npermissions:\n  admin: alice\n---\n# Secret\n\n[[gone]]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	body := u.get(t, "", "/problems").Body.String()
+	for _, want := range []string{`unresolved &#34;nowhere&#34;`, "task is in progress but has no assignee", "1 report(s) concern pages you may not read"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("problems page lacks %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "gone") {
+		t.Fatalf("problems page discloses an unreadable page:\n%s", body)
+	}
+	if body := u.get(t, "alice", "/problems").Body.String(); !strings.Contains(body, `unresolved &#34;gone&#34;`) || strings.Contains(body, "you may not read") {
+		t.Fatalf("admin's problems page:\n%s", body)
+	}
+	if body := u.get(t, "", "/").Body.String(); !strings.Contains(body, "1 open thread") {
+		t.Fatalf("thread count missing:\n%s", body)
+	}
+	for name, target := range map[string]string{"new": "/new", "problems": "/problems", "missing": "/nope", "forbidden": "/edit/secret.md"} {
+		lower := strings.ToLower(u.get(t, "bob", target).Body.String())
+		for _, banned := range []string{"<style", " style=", "javascript:", "hx-on", "hx-live"} {
+			if strings.Contains(lower, banned) {
+				t.Errorf("%s contains %q", name, banned)
+			}
+		}
+		if regexp.MustCompile(`\son[a-z]+=`).MatchString(lower) {
+			t.Errorf("%s has an inline event handler", name)
+		}
+	}
+}
+
+// A comment anchored from a selection of rendered text lands on the source
+// behind it, across Markdown syntax; a selection that maps to nothing is
+// explained.
+func TestCommentAnchorsMapRenderedText(t *testing.T) {
+	u := uiWorkspace(t)
+	if err := os.WriteFile(filepath.Join(u.dir, "plan.md"), []byte("---\npermissions:\n  comment: carol\n  admin: alice\n---\n# Plan\n\nShip the **first version** soon, see [[open|the open page]].\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rec := u.post(t, "carol", "/comment/plan.md", url.Values{"op": {"add"}, "anchor": {"the first version soon"}, "text": {"Define soon."}}, htmx)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Comment c1 added on “the **first version** soon”") {
+		t.Fatalf("comment from a rendered selection = %d\n%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(u.read(t, "plan.md"), "<!--comment:c1-->the **first version** soon<!--/comment:c1-->") {
+		t.Fatalf("anchor not mapped to source:\n%s", u.read(t, "plan.md"))
+	}
+	rec = u.post(t, "carol", "/comment/plan.md", url.Values{"op": {"add"}, "anchor": {"open page"}, "text": {"Link?"}}, htmx)
+	if rec.Code != http.StatusOK || !strings.Contains(u.read(t, "plan.md"), "<!--comment:c2-->[[open|the open page]]<!--/comment:c2-->") {
+		t.Fatalf("anchor across a reference = %d\n%s", rec.Code, u.read(t, "plan.md"))
+	}
+	rec = u.post(t, "carol", "/comment/plan.md", url.Values{"op": {"add"}, "anchor": {"nowhere at all"}, "text": {"?"}}, htmx)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "was not found in the page") {
+		t.Fatalf("unmappable anchor = %d\n%s", rec.Code, rec.Body.String())
+	}
 }
 
 // Starting an agent from the browser needs a runner fixed by the server and

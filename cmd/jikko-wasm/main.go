@@ -273,8 +273,10 @@ func stringsFromJS(v js.Value) []string {
 	return out
 }
 
+// safe accepts a workspace-relative path that is local (not empty, not
+// absolute, not reaching outside the root) and already in clean form.
 func safe(p string) bool {
-	return p != "" && !filepath.IsAbs(p) && filepath.Clean(p) == filepath.FromSlash(p) && filepath.Clean(p) != ".." && !filepath.IsLocal(p) == false
+	return filepath.IsLocal(p) && filepath.Clean(p) == filepath.FromSlash(p)
 }
 
 func jsonOK(v any) any {

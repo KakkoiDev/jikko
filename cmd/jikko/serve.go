@@ -2,9 +2,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -17,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +35,9 @@ const (
 	maxStreams = 64
 	// maxLoginBody bounds the login form an unauthenticated caller may send.
 	maxLoginBody = 4 << 10
+	// refreshInterval is how often a live list is rendered again when
+	// nothing changed, so "3m ago" does not go stale.
+	refreshInterval = 30 * time.Second
 )
 
 // cache holds the parsed workspace and re-reads it only when the Markdown tree
@@ -48,20 +50,45 @@ type cache struct {
 	ws    *jikko.Workspace
 	err   error
 	ready bool
+	// checked is when the tree was last stamped. Live streams ask every
+	// second each; one stamp per stampInterval serves them all.
+	checked time.Time
 
 	// autoCommit records every mutation as an attributed Git commit.
 	autoCommit bool
 }
 
+// stampInterval is how long a tree stamp is trusted before the tree is
+// walked again.
+const stampInterval = 500 * time.Millisecond
+
+// load returns the current workspace, stamping the tree first so a request
+// always sees the files as they are.
 func (c *cache) load() (*jikko.Workspace, error) {
-	stamp, err := treeStamp(c.dir)
-	if err != nil {
-		return nil, err
-	}
+	ws, _, err := c.refresh(0)
+	return ws, err
+}
+
+// loadStamped is load for a live stream: it returns the stamp too, so the
+// stream can tell whether anything changed, and trusts a stamp taken within
+// stampInterval, so many streams cost one walk between them.
+func (c *cache) loadStamped() (*jikko.Workspace, string, error) {
+	return c.refresh(stampInterval)
+}
+
+func (c *cache) refresh(trust time.Duration) (*jikko.Workspace, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.ready && trust > 0 && time.Since(c.checked) < trust {
+		return c.ws, c.stamp, c.err
+	}
+	stamp, err := treeStamp(c.dir)
+	if err != nil {
+		return nil, "", err
+	}
+	c.checked = time.Now()
 	if c.ready && stamp == c.stamp {
-		return c.ws, c.err
+		return c.ws, c.stamp, c.err
 	}
 	ws, err := jikko.Open(c.dir)
 	if err == nil {
@@ -71,29 +98,21 @@ func (c *cache) load() (*jikko.Workspace, error) {
 		}
 	}
 	c.stamp, c.ws, c.err, c.ready = stamp, ws, err, true
-	return ws, err
+	return ws, stamp, err
 }
 
+// treeStamp fingerprints the names, sizes and modification times of the
+// workspace's files -- pages and assets alike, since an asset dropped into
+// the tree changes what embeds resolve to -- skipping what the workspace
+// ignores.
 func treeStamp(dir string) (string, error) {
 	h := sha256.New()
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" || d.Name() == ".data" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.EqualFold(filepath.Ext(p), ".md") {
-			return nil
-		}
+	err := jikko.WalkFiles(dir, func(p, rel string, d fs.DirEntry) error {
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(h, "%s\x00%d\x00%d\n", p, info.Size(), info.ModTime().UnixNano())
+		fmt.Fprintf(h, "%s\x00%d\x00%d\n", rel, info.Size(), info.ModTime().UnixNano())
 		return nil
 	})
 	if err != nil {
@@ -102,90 +121,31 @@ func treeStamp(dir string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// sessionStore exchanges a permanent bearer token for a short-lived browser
-// session, so the token itself is never stored in a cookie or replayed on
-// every request. Each session remembers the credential it was created from,
-// so revoking that credential ends the session too.
-type sessionStore struct {
-	mu sync.Mutex
-	m  map[string]sessionEntry
-}
-
-type sessionEntry struct {
-	identity   string
-	credential string
-	expires    time.Time
-	seen       time.Time
-}
-
-func newSessionStore() *sessionStore { return &sessionStore{m: map[string]sessionEntry{}} }
-
-func (s *sessionStore) create(identity, credential string) (string, error) {
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
-	id := base64.RawURLEncoding.EncodeToString(raw)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := time.Now()
-	for k, v := range s.m {
-		if now.After(v.expires) {
-			delete(s.m, k)
+// liveStamp fingerprints everything the home page shows besides the tree:
+// presence records and the sessions people hold.
+func (s *server) liveStamp(ws *jikko.Workspace) string {
+	h := sha256.New()
+	if entries, err := os.ReadDir(filepath.Join(ws.Root, ".data", "presence")); err == nil {
+		for _, e := range entries {
+			if info, err := e.Info(); err == nil {
+				fmt.Fprintf(h, "%s\x00%d\n", e.Name(), info.ModTime().UnixNano())
+			}
 		}
 	}
-	s.m[id] = sessionEntry{identity: identity, credential: credential, expires: now.Add(sessionTTL), seen: now}
-	return id, nil
+	active := s.sessions.active()
+	for _, name := range sortedNames(active) {
+		fmt.Fprintf(h, "%s\x00%d\n", name, active[name].Unix()/60)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
-// active reports the identities with a live session and when each last made
-// a request, so the interface can show who is here.
-func (s *sessionStore) active() map[string]time.Time {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := time.Now()
-	out := map[string]time.Time{}
-	for _, e := range s.m {
-		if now.After(e.expires) {
-			continue
-		}
-		if last, ok := out[e.identity]; !ok || e.seen.After(last) {
-			out[e.identity] = e.seen
-		}
+func sortedNames(m map[string]time.Time) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
-}
-
-// lookup returns a live session without extending it.
-func (s *sessionStore) lookup(id string) (sessionEntry, bool) {
-	if id == "" {
-		return sessionEntry{}, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.m[id]
-	if !ok || time.Now().After(e.expires) {
-		delete(s.m, id)
-		return sessionEntry{}, false
-	}
-	return e, true
-}
-
-// touch slides a live session's expiry forward.
-func (s *sessionStore) touch(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if e, ok := s.m[id]; ok && !time.Now().After(e.expires) {
-		e.expires = time.Now().Add(sessionTTL)
-		e.seen = time.Now()
-		s.m[id] = e
-	}
-}
-
-func (s *sessionStore) drop(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.m, id)
 }
 
 type server struct {
@@ -194,7 +154,8 @@ type server struct {
 	tmpl       *template.Template
 	trustProxy bool
 	streams    chan struct{}
-	// csrfKey signs the anti-forgery tokens of this process's forms.
+	// csrfKey signs the anti-forgery tokens of the forms. It is stored under
+	// .data so a restart does not invalidate forms already open.
 	csrfKey []byte
 	// maxUpload is the maximum size of an uploaded file.
 	maxUpload int64
@@ -216,6 +177,13 @@ type pageData struct {
 	Message string
 	Detail  *detailView
 	Edit    *editView
+	// Status is the HTTP status of a message page.
+	Status int
+	New    *newView
+	// Problems is the check report page.
+	Problems *problemsView
+	// Report says what a rename or deletion did to references.
+	Report *changeReport
 	// Online is who is here: running agents and people with a live session.
 	Online      []presenceView
 	HereSummary string
@@ -293,17 +261,13 @@ func serve(args []string) error {
 }
 
 func newServer(root string, trustProxy bool) *server {
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		panic(err)
-	}
 	return &server{
 		cache:      &cache{dir: root},
-		sessions:   newSessionStore(),
+		sessions:   openSessionStore(root),
 		tmpl:       template.Must(template.New("jikko").Funcs(templateFuncs).ParseFS(jikkoweb.Templates, "templates/*.html")),
 		trustProxy: trustProxy,
 		streams:    make(chan struct{}, maxStreams),
-		csrfKey:    key,
+		csrfKey:    loadKey(root),
 		maxUpload:  jikko.DefaultMaxUpload,
 	}
 }
@@ -315,6 +279,11 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/logout", s.logout)
 	mux.HandleFunc("/pages", s.pages)
 	mux.HandleFunc("/events", s.events)
+	mux.HandleFunc("GET /new", s.newPage)
+	mux.HandleFunc("POST /create", s.createPage)
+	mux.HandleFunc("POST /rename/{path...}", s.renamePage)
+	mux.HandleFunc("POST /delete/{path...}", s.deletePage)
+	mux.HandleFunc("GET /problems", s.problems)
 	mux.HandleFunc("GET /p/{path...}", s.pageDetail)
 	mux.HandleFunc("GET /edit/{path...}", s.editPage)
 	mux.HandleFunc("POST /save/{path...}", s.savePage)
@@ -356,7 +325,25 @@ func securityHeaders(next http.Handler) http.Handler {
 // take the workspace offline.
 func (s *server) fail(w http.ResponseWriter, err error) {
 	log.Printf("request failed: %v", err)
-	http.Error(w, "the workspace could not be read; see the server log", http.StatusServiceUnavailable)
+	s.plainOrPage(w, nil, http.StatusServiceUnavailable, "The workspace could not be read; see the server log.")
+}
+
+// plainOrPage answers with a styled message page, or with plain text when
+// the page itself cannot be rendered or the request is not for a page.
+func (s *server) plainOrPage(w http.ResponseWriter, r *http.Request, status int, message string) {
+	name := "page"
+	if r != nil && isHTMX(r) {
+		name = "message"
+	}
+	var b bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&b, name, pageData{Status: status, Message: message}); err != nil {
+		http.Error(w, message, status)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write(b.Bytes())
 }
 
 // actor identifies the caller from a bearer token or a browser session.
@@ -445,7 +432,7 @@ func (s *server) renderCSRF(name string, r *http.Request, extend bool, csrf stri
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
-		http.NotFound(w, r)
+		s.plainOrPage(w, r, http.StatusNotFound, "There is nothing at this address.")
 		return
 	}
 	out, _, err := s.renderCSRF("page", r, true, s.csrfFor(w, r))
@@ -469,7 +456,7 @@ func (s *server) pages(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		s.plainOrPage(w, r, http.StatusMethodNotAllowed, "Log in with the form at the top of the workspace page.")
 		return
 	}
 	// A token is a few dozen bytes; there is no reason to buffer megabytes of
@@ -486,7 +473,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	p, credential, err := ws.AuthenticateCredential(r.FormValue("token"))
 	if err != nil {
 		log.Printf("login rejected: %v", err)
-		http.Error(w, "authentication failed", http.StatusUnauthorized)
+		s.refuse(w, r, http.StatusUnauthorized, "", "That token was not accepted. Check that it was pasted whole and that its identity still exists.")
 		return
 	}
 	id, err := s.sessions.create(strings.TrimSuffix(p.Path, ".md"), credential)
@@ -500,7 +487,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		s.plainOrPage(w, r, http.StatusMethodNotAllowed, "Log out with the button at the top of the workspace page.")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
@@ -586,6 +573,13 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	// The list is rendered again only when the tree, presence or sessions
+	// changed, or every refreshInterval so relative times stay current; a
+	// tick that finds nothing changed costs a cached stamp and a session
+	// check.
+	ws, stamp, _ := s.cache.loadStamped()
+	key := stamp + s.liveStamp(ws)
+	rendered := time.Now()
 	expiry := time.After(streamMaxAge)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -597,7 +591,20 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-ticker.C:
 		}
+		ws, stamp, err := s.cache.loadStamped()
+		if err != nil {
+			continue
+		}
+		if s.actor(r, ws, false) != actor {
+			return
+		}
+		if next := stamp + s.liveStamp(ws); next == key && time.Since(rendered) < refreshInterval {
+			continue
+		} else {
+			key = next
+		}
 		current, now, err := s.render("pages", r, false)
+		rendered = time.Now()
 		if err == nil && now != actor {
 			return
 		}

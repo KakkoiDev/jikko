@@ -6,34 +6,17 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
 // ExportZIP returns a portable snapshot of the workspace source and assets.
 // Runtime internals, Git history and credentials are deliberately excluded, as
-// are symbolic links and other non-regular files.
+// are symbolic links, other non-regular files, and whatever the workspace's
+// ignore files exclude.
 func (w *Workspace) ExportZIP() ([]byte, error) {
 	var out bytes.Buffer
 	zw := zip.NewWriter(&out)
-	err := filepath.WalkDir(w.Root, func(full string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(w.Root, full)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if rel == "." {
-			return nil
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" || d.Name() == ".data" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	err := WalkFiles(w.Root, func(full, rel string, d fs.DirEntry) error {
 		// A .git file marks a worktree or submodule and is Git internals too.
 		if strings.EqualFold(d.Name(), ".auth.md") || d.Name() == ".git" {
 			return nil

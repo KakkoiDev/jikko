@@ -336,3 +336,42 @@ form{margin:0}
 .jk-meta .jk-dot{margin-right:5px}
 .jk-chip .jk-avatar{width:20px;height:20px}
 .jk-reply .jk-btn{min-height:36px}
+
+/* Ordinary Markdown: tables, pictures, strikethrough, framed PDFs */
+.jk-body img{max-width:100%;height:auto;border-radius:var(--jk-r)}
+.jk-body del{color:var(--jk-text-3)}
+.jk-pdf{width:100%;height:40rem;border:1px solid var(--jk-border);border-radius:var(--jk-r);background:var(--jk-sunken)}
+.jk-table{border-collapse:collapse;margin:0 0 var(--jk-s-4);max-width:100%;display:block;overflow-x:auto;font-size:var(--jk-t-sm)}
+.jk-table th,.jk-table td{border:1px solid var(--jk-border);padding:6px 10px;text-align:left;vertical-align:top}
+.jk-table th{background:var(--jk-sunken);font-weight:600}
+.jk-align-right{text-align:right !important}
+.jk-align-center{text-align:center !important}
+.jk-remote-image::before{content:"🖼 "}
+
+/* Login help, message pages */
+.jk-login{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+.jk-help code,.jk-xs code{font-family:var(--jk-mono);font-size:.95em}
+.jk-message .alert h2{font-size:var(--jk-t-md);font-weight:600;margin-bottom:var(--jk-s-1)}
+.jk-message p{max-width:60ch}
+
+/* Rename, delete and their reports */
+.jk-manage{margin-top:var(--jk-s-6);border-top:1px solid var(--jk-border);padding-top:var(--jk-s-4)}
+.jk-manage summary{cursor:pointer;margin-bottom:var(--jk-s-3)}
+.jk-manage form{margin-bottom:var(--jk-s-4);max-width:40rem}
+.jk-manage .jk-row .jk-input{flex:1 1 16rem;width:auto}
+.jk-btn[data-variant="danger"]{color:var(--jk-blocked);border-color:var(--jk-blocked)}
+.jk-btn[data-variant="danger"]:hover{background:var(--jk-blocked-soft)}
+.jk-changes{border:1px solid var(--jk-border);border-radius:var(--jk-r-lg);background:var(--jk-surface);padding:var(--jk-s-4);display:flex;flex-direction:column;gap:var(--jk-s-2);margin-bottom:var(--jk-s-4)}
+.jk-changes h3{font-size:var(--jk-t-md);font-weight:600}
+.jk-changes ul{list-style:disc;padding-left:var(--jk-s-5);font-size:var(--jk-t-sm);display:flex;flex-direction:column;gap:var(--jk-s-1)}
+
+/* New page, problems */
+.jk-new .jk-filters a{min-height:32px;padding:0 10px;border-radius:999px;display:inline-flex;align-items:center;text-decoration:none;font-size:var(--jk-t-sm);font-weight:500;color:var(--jk-text-2)}
+.jk-new .jk-filters a:hover{background:var(--jk-sunken)}
+.jk-new .jk-filters a[aria-current="true"]{background:var(--jk-text);color:var(--jk-bg)}
+.jk-create{max-width:48rem}
+.jk-problems .jk-list{margin-top:var(--jk-s-4)}
+.jk-problem-group > div{display:flex;flex-direction:column;gap:var(--jk-s-2);min-width:0}
+.jk-problem-group h3{font-size:var(--jk-t-base);font-weight:600}
+.jk-problem-group ul{display:flex;flex-direction:column;gap:var(--jk-s-1)}
+.jk-problem-group .jk-notice{margin:0;font-size:var(--jk-t-sm)}

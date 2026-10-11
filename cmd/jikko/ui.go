@@ -87,6 +87,27 @@ var templateFuncs = template.FuncMap{
 	"saveURL":    func(p string) string { return "/save/" + escapedPath(p) },
 	"commentURL": func(p string) string { return "/comment/" + escapedPath(p) },
 	"uploadURL":  func(p string) string { return "/upload/" + escapedPath(p) },
+	"renameURL":  func(p string) string { return "/rename/" + escapedPath(p) },
+	"deleteURL":  func(p string) string { return "/delete/" + escapedPath(p) },
+	"statusTitle": func(status int) string {
+		switch status {
+		case http.StatusUnauthorized:
+			return "Log in to continue"
+		case http.StatusForbidden:
+			return "Not allowed"
+		case http.StatusNotFound:
+			return "Not found"
+		case http.StatusMethodNotAllowed:
+			return "Wrong kind of request"
+		case http.StatusRequestEntityTooLarge:
+			return "Too large"
+		case http.StatusServiceUnavailable:
+			return "Workspace unavailable"
+		case 0, http.StatusOK:
+			return "Notice"
+		}
+		return http.StatusText(status)
+	},
 	"liveURL": func(p, rev, mode string) string {
 		return "/events/page/" + escapedPath(p) + "?" + url.Values{"rev": {rev}, "mode": {mode}}.Encode()
 	},
@@ -203,14 +224,14 @@ func (s *server) validCSRF(r *http.Request) bool {
 // a valid anti-forgery token. It answers the request itself when it refuses.
 func (s *server) postAllowed(w http.ResponseWriter, r *http.Request) bool {
 	if !sameOrigin(r) {
-		http.Error(w, "cross-site request rejected", http.StatusForbidden)
+		s.plainOrPage(w, r, http.StatusForbidden, "This request came from another site and was not carried out.")
 		return false
 	}
 	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 		return true
 	}
 	if !s.validCSRF(r) {
-		http.Error(w, "missing or invalid anti-forgery token; reload the page and try again", http.StatusForbidden)
+		s.plainOrPage(w, r, http.StatusForbidden, "The form's anti-forgery token was missing or no longer valid, so nothing was changed. This happens when a session ends while a page is open.")
 		return false
 	}
 	return true
@@ -510,6 +531,10 @@ func (s *server) respond(w http.ResponseWriter, r *http.Request, status int, dat
 			name = "detail"
 		case data.Edit != nil:
 			name = "edit"
+		case data.New != nil:
+			name = "new"
+		case data.Report != nil:
+			name = "report"
 		default:
 			name = "message"
 		}
@@ -527,7 +552,7 @@ func (s *server) respond(w http.ResponseWriter, r *http.Request, status int, dat
 
 // refuse answers with a message page.
 func (s *server) refuse(w http.ResponseWriter, r *http.Request, status int, actor, message string) {
-	s.respond(w, r, status, pageData{Actor: actor, CSRF: s.csrfFor(w, r), Message: message})
+	s.respond(w, r, status, pageData{Actor: actor, CSRF: s.csrfFor(w, r), Status: status, Message: message})
 }
 
 const (
@@ -584,7 +609,7 @@ func (s *server) mutationContextLimit(w http.ResponseWriter, r *http.Request, li
 	if r.ContentLength > limit {
 		// Say so before the form is parsed: a body cut short by the limit
 		// would otherwise read as a missing anti-forgery token.
-		http.Error(w, fmt.Sprintf("the request is larger than the %d bytes accepted here", limit), http.StatusRequestEntityTooLarge)
+		s.plainOrPage(w, r, http.StatusRequestEntityTooLarge, fmt.Sprintf("The request is larger than the %d bytes accepted here, so nothing was changed.", limit))
 		return nil, "", false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
@@ -716,7 +741,7 @@ func (s *server) savePage(w http.ResponseWriter, r *http.Request) {
 		edit := editFor(p, shownMode, yours, base, rev)
 		edit.Error = err.Error()
 		status := http.StatusUnprocessableEntity
-		if strings.Contains(err.Error(), "lacks ") {
+		if jikko.IsPermissionError(err) {
 			status = http.StatusForbidden
 		}
 		s.respond(w, r, status, pageData{Actor: actor, CSRF: s.csrfFor(w, r), Edit: edit})
@@ -800,9 +825,18 @@ func (s *server) commentPage(w http.ResponseWriter, r *http.Request) {
 	var flash string
 	switch r.PostFormValue("op") {
 	case "add":
+		// The anchor field holds text selected in the rendered page, or an
+		// excerpt pasted as written; both are mapped to source text.
+		anchor := strings.TrimSpace(r.PostFormValue("anchor"))
+		if excerpt, mapErr := ws.SourceAnchor(actor, p.Path, anchor); mapErr == nil {
+			anchor = excerpt
+		} else {
+			err = mapErr
+			break
+		}
 		var id string
-		id, err = ws.AddComment(actor, p.Path, strings.TrimSpace(r.PostFormValue("anchor")), r.PostFormValue("text"))
-		flash = "Comment " + id + " added."
+		id, err = ws.AddComment(actor, p.Path, anchor, r.PostFormValue("text"))
+		flash = "Comment " + id + " added on “" + anchor + "”."
 	case "reply":
 		id := r.PostFormValue("id")
 		err = ws.ReplyComment(actor, p.Path, id, r.PostFormValue("text"))
@@ -817,7 +851,7 @@ func (s *server) commentPage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		status := http.StatusUnprocessableEntity
-		if strings.Contains(err.Error(), "lacks ") {
+		if jikko.IsPermissionError(err) {
 			status = http.StatusForbidden
 		}
 		// The page may have changed; show it as it is now with the error.
@@ -967,7 +1001,12 @@ func (s *server) serveFile(w http.ResponseWriter, r *http.Request) {
 	}
 	ext := strings.ToLower(path.Ext(file))
 	h := w.Header()
-	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	h.Set("Content-Security-Policy", "default-src 'none'; sandbox; frame-ancestors 'self'")
+	if ext == ".pdf" {
+		// A PDF embed is framed by a page of this site; nothing else may
+		// frame it.
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+	}
 	h.Set("Cache-Control", "private, no-cache")
 	ctype := mime.TypeByExtension(ext)
 	if ctype == "" || !inlineTypes[ext] {
